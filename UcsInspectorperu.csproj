@@ -1,0 +1,97 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+	<PropertyGroup>
+		<TargetFramework>net48</TargetFramework>
+		<OutputType>Library</OutputType>
+		<UseWindowsForms>true</UseWindowsForms>
+		<GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+		<RootNamespace>UcsInspectorperu</RootNamespace>
+		<AssemblyName>UcsInspectorperu</AssemblyName>
+		<Platforms>x64</Platforms>
+		<EnableDefaultItems>false</EnableDefaultItems>
+		<LangVersion>7.3</LangVersion>
+	</PropertyGroup>
+
+	<PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+		<PlatformTarget>x64</PlatformTarget>
+		<Prefer32Bit>false</Prefer32Bit>
+		<OutputPath>bin\x64\Debug\</OutputPath>
+		<DefineConstants>DEBUG;TRACE</DefineConstants>
+	</PropertyGroup>
+
+	<PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+		<PlatformTarget>x64</PlatformTarget>
+		<Prefer32Bit>false</Prefer32Bit>
+		<Optimize>true</Optimize>
+		<DebugType>pdbonly</DebugType>
+		<OutputPath>bin\x64\Release\</OutputPath>
+		<DefineConstants>TRACE</DefineConstants>
+	</PropertyGroup>
+
+	<!-- Código -->
+	<ItemGroup>
+		<Compile Include="AssemblyInfo.cs" />
+		<Compile Include="StandardAddInServer.cs" />
+		<Compile Include="Ui\UcsForm.cs" />
+	</ItemGroup>
+
+	<!-- Recursos WinForms -->
+	<ItemGroup>
+		<EmbeddedResource Include="Ui\UcsForm.resx">
+			<DependentUpon>UcsForm.cs</DependentUpon>
+		</EmbeddedResource>
+	</ItemGroup>
+
+	<!-- Archivos auxiliares -->
+	<ItemGroup>
+		<None Include="UcsInspectorperu.X.manifest" />
+		<None Include="Autodesk.UcsInspectorperu.Inventor.addin" />
+		<None Include="Readme.txt" />
+	</ItemGroup>
+
+	<!-- Interop Inventor -->
+	<ItemGroup>
+		<Reference Include="Autodesk.Inventor.Interop">
+			<HintPath>$(ProgramFiles)\Autodesk\Inventor 2026\Bin\Public Assemblies\Autodesk.Inventor.Interop.dll</HintPath>
+			<EmbedInteropTypes>false</EmbedInteropTypes>
+			<Private>true</Private>
+		</Reference>
+	</ItemGroup>
+
+	<!-- Rutas AddIns (dos variantes); elegimos una -->
+	<PropertyGroup>
+		<AddinFileName>UcsInspectorperu.addin</AddinFileName>
+		<InventorAddinsDirA>$(APPDATA)\Autodesk\Autodesk Inventor 2026\Addins</InventorAddinsDirA>
+		<InventorAddinsDirB>$(APPDATA)\Autodesk\Inventor 2026\Addins</InventorAddinsDirB>
+		<!-- Si existe A la uso; si no, si existe B; si no existe ninguna, uso A y la creo -->
+		<InventorAddinsDir Condition="Exists('$(InventorAddinsDirA)')">$(InventorAddinsDirA)</InventorAddinsDir>
+		<InventorAddinsDir Condition="'$(InventorAddinsDir)'=='' and Exists('$(InventorAddinsDirB)')">$(InventorAddinsDirB)</InventorAddinsDir>
+		<InventorAddinsDir Condition="'$(InventorAddinsDir)'==''">$(InventorAddinsDirA)</InventorAddinsDir>
+	</PropertyGroup>
+
+	<!-- SIEMPRE después de compilar el proyecto -->
+	<Target Name="AfterBuild">
+		<Message Text="TargetPath=$(TargetPath)" Importance="High" />
+		<Message Text="Deploy to $(InventorAddinsDir)" Importance="High" />
+
+		<MakeDir Directories="$(InventorAddinsDir)" />
+
+		<!-- Copia DLL -->
+		<Copy SourceFiles="$(TargetPath)"
+			  DestinationFiles="$(InventorAddinsDir)\$(TargetFileName)"
+			  OverwriteReadOnlyFiles="true"
+			  SkipUnchangedFiles="false" />
+
+		<!-- Copia .addin -->
+		<Copy SourceFiles="$(ProjectDir)Autodesk.UcsInspectorperu.Inventor.addin"
+			  DestinationFiles="$(InventorAddinsDir)\$(AddinFileName)"
+			  OverwriteReadOnlyFiles="true"
+			  SkipUnchangedFiles="false" />
+
+		<!-- PDB (opcional) -->
+		<Copy Condition="Exists('$(TargetDir)$(TargetName).pdb')"
+			  SourceFiles="$(TargetDir)$(TargetName).pdb"
+			  DestinationFiles="$(InventorAddinsDir)\$(TargetName).pdb"
+			  OverwriteReadOnlyFiles="true"
+			  SkipUnchangedFiles="true" />
+	</Target>
+</Project>

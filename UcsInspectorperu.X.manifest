@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+
+  <assemblyIdentity name="UcsInspectorperu" version="1.0.0.0"></assemblyIdentity>
+
+  <clrClass clsid="{a8c2eab2-d332-4188-bf7d-b9a07768fe66}" progid="UcsInspectorperu.StandardAddInServer" threadingModel="Both" name="UcsInspectorperu.StandardAddInServer" runtimeVersion=""></clrClass>
+
+  <file name="UcsInspectorperu.dll" hashalg="SHA1"></file>
+
+</assembly>

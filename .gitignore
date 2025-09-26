@@ -1,0 +1,19 @@
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.cache
+*.log
+
+# Compilados
+bin/
+obj/
+*.pdb
+
+# Otros
+*.ipch
+*.opensdf
+*.sdf
+*.tlog
+*.VC.db
+*.VC.opendb
