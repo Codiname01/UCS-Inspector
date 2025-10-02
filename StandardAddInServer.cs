@@ -1,15 +1,17 @@
 ﻿using System;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Runtime.ExceptionServices;
 using System.Windows.Forms;
 using Inventor;
 
-// ALIAS para evitar choques con Inventor.Environment/File/Path
-using Env = System.Environment;
-using IOPath = System.IO.Path;
-using IOFile = System.IO.File;
-using IODir = System.IO.Directory;
+// ALIAS seguros con Inventor
+using SysEnv = System.Environment;
+using SysPath = System.IO.Path;
+using SysFile = System.IO.File;
+using SysDir = System.IO.Directory;
 
 namespace UcsInspectorperu
 {
@@ -17,31 +19,27 @@ namespace UcsInspectorperu
     [Guid("a8c2eab2-d332-4188-bf7d-b9a07768fe66")]
     public class StandardAddInServer : ApplicationAddInServer
     {
-        // ---------- LOG (con varios fallbacks) ----------
+        // ---------- LOG: %LOCALAPPDATA%\UcsInspectorperu\addin.log (fallback Roaming) ----------
         private static void Log(string msg)
         {
-            string[] paths = new[]
-            {
-                IOPath.Combine(Env.GetFolderPath(Env.SpecialFolder.ApplicationData),      "UcsInspectorperu", "addin.log"),
-                IOPath.Combine(Env.GetFolderPath(Env.SpecialFolder.LocalApplicationData), "Temp",             "UcsInspectorperu.addin.log"),
-                IOPath.Combine(Env.GetEnvironmentVariable("TEMP") ?? IOPath.GetTempPath(),"UcsInspectorperu.addin.log"),
-                IOPath.Combine(Env.GetFolderPath(Env.SpecialFolder.MyDocuments),          "UcsInspectorperu", "addin.log"),
-            };
+            var local = SysPath.Combine(SysEnv.GetFolderPath(SysEnv.SpecialFolder.LocalApplicationData), "UcsInspectorperu", "addin.log");
+            var roam = SysPath.Combine(SysEnv.GetFolderPath(SysEnv.SpecialFolder.ApplicationData), "UcsInspectorperu", "addin.log");
+            string[] paths = new[] { local, roam };
 
             foreach (var p in paths)
             {
                 try
                 {
-                    var dir = IOPath.GetDirectoryName(p);
-                    if (!string.IsNullOrEmpty(dir)) IODir.CreateDirectory(dir);
-                    IOFile.AppendAllText(p, "[" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "] " + msg + Env.NewLine);
+                    var dir = SysPath.GetDirectoryName(p);
+                    if (!string.IsNullOrEmpty(dir)) SysDir.CreateDirectory(dir);
+                    SysFile.AppendAllText(p, "[" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "] " + msg + SysEnv.NewLine);
                     return;
                 }
-                catch { /* prueba la siguiente ruta */ }
+                catch { /* prueba la siguiente */ }
             }
         }
 
-        // ---------- RESOLVE del Interop + pop-up temprano ----------
+        // ---------- RESOLVE del Interop + FirstChance (sin pop-ups) ----------
         static StandardAddInServer()
         {
             AppDomain.CurrentDomain.AssemblyResolve += (sender, args) =>
@@ -50,27 +48,25 @@ namespace UcsInspectorperu
                 {
                     if (args.Name.StartsWith("Autodesk.Inventor.Interop", StringComparison.OrdinalIgnoreCase))
                     {
-                        string pf = Env.GetFolderPath(Env.SpecialFolder.ProgramFiles);
+                        string pf = SysEnv.GetFolderPath(SysEnv.SpecialFolder.ProgramFiles);
                         string[] guesses =
                         {
-                            IOPath.Combine(pf, @"Autodesk\Inventor 2026\Bin\Public Assemblies\Autodesk.Inventor.Interop.dll"),
-                            IOPath.Combine(pf, @"Autodesk\Inventor 2026\Bin\Autodesk.Inventor.Interop.dll")
+                            SysPath.Combine(pf, @"Autodesk\Inventor 2026\Bin\Public Assemblies\Autodesk.Inventor.Interop.dll"),
+                            SysPath.Combine(pf, @"Autodesk\Inventor 2026\Bin\Autodesk.Inventor.Interop.dll")
                         };
                         foreach (var g in guesses)
-                            if (IOFile.Exists(g)) return Assembly.LoadFrom(g);
+                            if (SysFile.Exists(g)) return Assembly.LoadFrom(g);
                     }
                 }
                 catch { }
                 return null;
             };
 
-            try
+            AppDomain.CurrentDomain.FirstChanceException += (s, e) =>
             {
-                MessageBox.Show("UCS Inspector: static ctor OK", "UcsInspectorperu",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information,
-                    MessageBoxDefaultButton.Button1, MessageBoxOptions.DefaultDesktopOnly);
-            }
-            catch { }
+                Log("FirstChance: " + e.Exception.GetType().FullName + " - " + e.Exception.Message);
+            };
+
             Log("static ctor reached");
         }
 
@@ -81,13 +77,6 @@ namespace UcsInspectorperu
         public StandardAddInServer()
         {
             Log("ctor StandardAddInServer()");
-            try
-            {
-                MessageBox.Show("UCS Inspector: ctor", "UcsInspectorperu",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information,
-                    MessageBoxDefaultButton.Button1, MessageBoxOptions.DefaultDesktopOnly);
-            }
-            catch { }
         }
 
         public void Activate(ApplicationAddInSite addInSiteObject, bool firstTime)
@@ -98,19 +87,47 @@ namespace UcsInspectorperu
                 _app = addInSiteObject.Application;
                 Log("Assembly.Location = " + typeof(StandardAddInServer).Assembly.Location);
 
+                // --- Iconos embebidos (opcionales). Si no se encuentran, sigue sin iconos.
+                var smallIco = LoadIcon(".res.ucs16.png");
+                var largeIco = LoadIcon(".res.ucs32.png");
+
                 var defs = _app.CommandManager.ControlDefinitions;
-                _btn = defs.AddButtonDefinition(
-                    "UCS Inspector",
-                    "UcsInspectorperu:UcsInspectorBtn",
-                    CommandTypesEnum.kNonShapeEditCmdType,
-                    _clientId,
-                    "Ver y editar offsets/ángulos de un UCS",
-                    "Selecciona un UCS y aplica +, -, * o / a sus parámetros");
+
+                if (smallIco != null && largeIco != null)
+                {
+                    _btn = defs.AddButtonDefinition(
+                        "UCS Inspector",
+                        "UcsInspectorperu:UcsInspectorBtn",
+                        CommandTypesEnum.kNonShapeEditCmdType,
+                        _clientId,
+                        "Ver y editar offsets/ángulos de un UCS",
+                        "Selecciona un UCS y aplica +, -, * o / a sus parámetros",
+                        smallIco, largeIco, ButtonDisplayEnum.kDisplayTextInLearningMode);
+                }
+                else
+                {
+                    _btn = defs.AddButtonDefinition(
+                        "UCS Inspector",
+                        "UcsInspectorperu:UcsInspectorBtn",
+                        CommandTypesEnum.kNonShapeEditCmdType,
+                        _clientId,
+                        "Ver y editar offsets/ángulos de un UCS",
+                        "Selecciona un UCS y aplica +, -, * o / a sus parámetros");
+                }
 
                 _btn.OnExecute += (Context) =>
                 {
-                    try { new Ui.UcsForm(_app).Show(); }
-                    catch (Exception ex) { Log("OnExecute error: " + ex); MessageBox.Show(ex.ToString()); }
+                    try
+                    {
+                        var owner = new WindowWrapper(new IntPtr(_app.MainFrameHWND));
+                        var frm = new Ui.UcsForm(_app)
+                        {
+                            ShowInTaskbar = false,
+                            StartPosition = FormStartPosition.CenterParent
+                        };
+                        frm.Show(owner);
+                    }
+                    catch (Exception ex) { Log("OnExecute error: " + ex); MessageBox.Show(ex.ToString(), "UcsInspectorperu"); }
                 };
 
                 TryAddToRibbon("Part", "id_TabTools", "UcsInspectorperu:PanelPart");
@@ -118,17 +135,16 @@ namespace UcsInspectorperu
                 TryAddToRibbon("ZeroDoc", "id_TabToolsZeroDoc", "UcsInspectorperu:PanelZero");
                 TryAddToRibbon("Drawing", "id_TabTools", "UcsInspectorperu:PanelDrw");
 
+                // Intentar crear atajo Ctrl+Shift+U (si la API está disponible)
+                TryEnsureShortcut();
+
                 Log("Activate() OK");
-                MessageBox.Show("UCS Inspector: Activate() OK", "UcsInspectorperu",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information,
-                    MessageBoxDefaultButton.Button1, MessageBoxOptions.DefaultDesktopOnly);
             }
             catch (Exception ex)
             {
                 Log("Activate() FAILED: " + ex);
                 MessageBox.Show("UCS Inspector no pudo cargarse:\n\n" + ex, "UcsInspectorperu",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error,
-                    MessageBoxDefaultButton.Button1, MessageBoxOptions.DefaultDesktopOnly);
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
                 throw;
             }
         }
@@ -141,7 +157,7 @@ namespace UcsInspectorperu
                 var tab = rb.RibbonTabs[tabId];
 
                 RibbonPanel panel;
-                try { panel = tab.RibbonPanels["id_PanelProgramAddins"]; }
+                try { panel = tab.RibbonPanels["id_PanelPgmAddIns"]; } // panel integrado de Add-Ins
                 catch { panel = tab.RibbonPanels.Add("Add-Ins", panelInternalName, _clientId); }
 
                 bool already = false;
@@ -158,6 +174,42 @@ namespace UcsInspectorperu
             }
         }
 
+        // --- Crear atajo por reflexión si Inventor expone KeyboardShortcuts
+        private void TryEnsureShortcut()
+        {
+            try
+            {
+                var uim = _app.UserInterfaceManager;
+                var ksObj = uim.GetType().InvokeMember("KeyboardShortcuts",
+                    BindingFlags.GetProperty, null, uim, new object[0]);
+
+                if (ksObj == null) { Log("KeyboardShortcuts no disponible."); return; }
+
+                // ¿ya existe un atajo para nuestro botón?
+                foreach (object item in (System.Collections.IEnumerable)ksObj)
+                {
+                    var def = item.GetType().GetProperty("CommandDefinition")?.GetValue(item, null);
+                    var inName = def?.GetType().GetProperty("InternalName")?.GetValue(def, null) as string;
+                    if (string.Equals(inName, _btn.InternalName, StringComparison.OrdinalIgnoreCase))
+                        return; // ya está
+                }
+
+                // Intentar agregar "Ctrl+Shift+U"
+                try
+                {
+                    ksObj.GetType().InvokeMember("Add",
+                        BindingFlags.InvokeMethod, null, ksObj,
+                        new object[] { _btn, "Ctrl+Shift+U" });
+                    Log("Shortcut creado: Ctrl+Shift+U");
+                }
+                catch (Exception ex2)
+                {
+                    Log("No se pudo crear shortcut por API: " + ex2.Message);
+                }
+            }
+            catch (Exception ex) { Log("TryEnsureShortcut() fallo: " + ex.Message); }
+        }
+
         public void Deactivate()
         {
             Log("Deactivate()");
@@ -169,5 +221,46 @@ namespace UcsInspectorperu
 
         public void ExecuteCommand(int commandID) { }
         public object Automation { get { return null; } }
+
+        // Wrapper simple para pasar HWND como owner de WinForms
+        private sealed class WindowWrapper : IWin32Window
+        {
+            private readonly IntPtr _hwnd;
+            public WindowWrapper(IntPtr handle) { _hwnd = handle; }
+            public IntPtr Handle { get { return _hwnd; } }
+        }
+
+        // ---------- Carga de iconos embebidos como stdole.IPictureDisp ----------
+        private static stdole.IPictureDisp LoadIcon(string resourceNameEndsWith)
+        {
+            try
+            {
+                var asm = typeof(StandardAddInServer).Assembly;
+                // Buscar por sufijo para no depender del namespace exacto
+                string name = asm.GetManifestResourceNames()
+                                 .FirstOrDefault(n => n.EndsWith(resourceNameEndsWith, StringComparison.OrdinalIgnoreCase));
+                if (name == null) { Log("Icono no encontrado (sufijo): " + resourceNameEndsWith); return null; }
+
+                using (var s = asm.GetManifestResourceStream(name))
+                using (var img = System.Drawing.Image.FromStream(s))
+                {
+                    return (stdole.IPictureDisp)AxHostWrapper.GetIPictureDispFromPicture(img);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("LoadIcon fallo: " + ex.Message);
+                return null;
+            }
+        }
+
+        private class AxHostWrapper : AxHost
+        {
+            private AxHostWrapper() : base("") { }
+            public static object GetIPictureDispFromPicture(System.Drawing.Image img)
+            {
+                return AxHost.GetIPictureDispFromPicture(img);
+            }
+        }
     }
 }

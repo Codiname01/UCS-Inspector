@@ -9,6 +9,10 @@ using Inventor;
 // Alias para evitar choque con Inventor.Color/TextBox
 using DrawColor = System.Drawing.Color;
 using WinTextBox = System.Windows.Forms.TextBox;
+// Alias para evitar choque con Inventor.Environment y System.IO.Path
+using SysEnv = System.Environment;
+using SysPath = System.IO.Path;
+
 
 namespace UcsInspectorperu.Ui
 {
@@ -19,6 +23,8 @@ namespace UcsInspectorperu.Ui
         private Label lblXo, lblYo, lblZo, lblXa, lblYa, lblZa;
         private WinTextBox txtXo, txtYo, txtZo, txtXa, txtYa, txtZa;
         private Button btnApply, btnRefresh, btnPick;
+        private Button btnHelp;
+
 
         // NUEVO: UI y estado
         private NumericUpDown numStepMm, numStepDeg;
@@ -105,6 +111,10 @@ namespace UcsInspectorperu.Ui
 
             btnRefresh = new Button { Left = 12, Top = 315, Width = 140, Text = "Actualizar" };
             btnApply = new Button { Left = 530, Top = 315, Width = 140, Text = "Aplicar" };
+            btnHelp = new Button { Left = 405, Top = 315, Width = 115, Text = "Ayuda (F1)" };
+            btnHelp.Click += (s, e) => ShowHelp();
+            Controls.Add(btnHelp);
+
             btnRefresh.Click += (s, e) => LoadValues();
             btnApply.Click += (s, e) => ApplyChanges();
             Controls.Add(btnRefresh); Controls.Add(btnApply);
@@ -242,8 +252,14 @@ namespace UcsInspectorperu.Ui
         private void ApplyChanges()
         {
             if (_ucs == null) return;
+
+            var tm = _app.TransactionManager;
+            Inventor.Transaction tx = null;
+
             try
             {
+                tx = tm.StartTransaction((Inventor._Document)ActiveDoc, "UCS apply");
+
                 ApplyOne((Inventor.Parameter)txtXo.Tag, txtXo.Text, false);
                 ApplyOne((Inventor.Parameter)txtYo.Tag, txtYo.Text, false);
                 ApplyOne((Inventor.Parameter)txtZo.Tag, txtZo.Text, false);
@@ -252,11 +268,28 @@ namespace UcsInspectorperu.Ui
                 ApplyOne((Inventor.Parameter)txtZa.Tag, txtZa.Text, true);
 
                 ActiveDoc.Update();
+                tx.End();
+
                 LoadValues();
                 MessageBox.Show("Cambios aplicados.");
             }
-            catch (Exception ex) { MessageBox.Show("Error: " + ex.Message); }
+            catch (System.Runtime.InteropServices.COMException ex)
+            {
+                if (tx != null) tx.Abort();
+
+                // 0x80004005 = E_FAIL típico cuando el parámetro es de solo lectura
+                if (ex.ErrorCode == unchecked((int)0x80004005))
+                    MessageBox.Show("No se pudo aplicar: parámetro de solo lectura o UCS bloqueado.\n" + ex.Message);
+                else
+                    MessageBox.Show("Error COM: " + ex.Message);
+            }
+            catch (Exception ex)
+            {
+                if (tx != null) tx.Abort();
+                MessageBox.Show("Error al aplicar: " + ex.Message);
+            }
         }
+
 
         private void ApplyOne(Inventor.Parameter p, string expr, bool isAngle)
         {
@@ -345,6 +378,86 @@ namespace UcsInspectorperu.Ui
             }
             return base.ProcessCmdKey(ref msg, keyData);
         }
+
+
+
+        private void ShowHelp()
+        {
+            string logPath = SysPath.Combine(
+                SysEnv.GetFolderPath(SysEnv.SpecialFolder.LocalApplicationData),
+                "UcsInspectorperu", "addin.log");
+
+            string txt =
+        @"UCS Inspector – Ayuda rápida
+
+Selección
+• Filtra por nombre o usa 'Pick en pantalla'.
+• ENTER = pasar al siguiente UCS de la lista.
+
+Edición por texto (unidades automáticas)
+• +10 mm  | -2.5 mm  | *1.02  | /2  | 25 mm
+• +5 deg  | -10 deg  | *0.5   | /2  | 30 deg
+
+Nudges (1 transacción por paso)
+• Alt+Q / Alt+W → X- / X+
+• Alt+A / Alt+S → Y- / Y+
+• Alt+Z / Alt+X → Z- / Z+
+• Alt+1 / Alt+2 → RX+ / RX-
+• Alt+3 / Alt+4 → RY+ / RY-
+• Alt+5 / Alt+6 → RZ+ / RZ-
+
+Botones
+• Centrar  • Copiar  • Pegar  • Siguiente  • Actualizar  • Aplicar  • Ayuda (F1)
+
+Atajo global sugerido
+• Asigna 'Ctrl+Shift+U' en: Tools ▶ Customize ▶ Keyboard ▶ 'UCS Inspector'.
+
+Rutas
+• Log: " + logPath + @"
+• Settings: %LOCALAPPDATA%\UcsInspectorperu\settings.json";
+
+            var dlg = new Form
+            {
+                Text = "UCS Inspector – Ayuda",
+                StartPosition = FormStartPosition.CenterParent,
+                FormBorderStyle = FormBorderStyle.SizableToolWindow,
+                Width = 620,
+                Height = 520
+            };
+
+            var tb = new System.Windows.Forms.TextBox
+            {
+                Multiline = true,
+                ReadOnly = true,
+                ScrollBars = ScrollBars.Vertical,
+                Dock = DockStyle.Fill,
+                Font = new System.Drawing.Font("Consolas", 9.0f),
+                Text = txt
+            };
+            dlg.Controls.Add(tb);
+
+            var pnl = new Panel { Dock = DockStyle.Bottom, Height = 40 };
+            var btnOpenLog = new Button { Left = 10, Top = 8, Width = 120, Text = "Abrir log" };
+            btnOpenLog.Click += (s, e) =>
+            {
+                try
+                {
+                    if (System.IO.File.Exists(logPath))
+                        System.Diagnostics.Process.Start("explorer.exe", "/select,\"" + logPath + "\"");
+                    else
+                        MessageBox.Show("Aún no existe el log:\n" + logPath);
+                }
+                catch { }
+            };
+            var btnClose = new Button { Left = 480, Top = 8, Width = 120, Text = "Cerrar" };
+            btnClose.Click += (s, e) => dlg.Close();
+            pnl.Controls.Add(btnOpenLog);
+            pnl.Controls.Add(btnClose);
+            dlg.Controls.Add(pnl);
+
+            dlg.ShowDialog(this);
+        }
+
 
         private void NextUcs()
         {
@@ -461,12 +574,27 @@ namespace UcsInspectorperu.Ui
         {
             try
             {
-                object u = p.get_Units(); // descriptor de acceso COM
-                if (u is string) return (string)u;
-                return u != null ? u.ToString() : "";
+                object u = p.get_Units();          // <- accessor COM
+                return u as string ?? (u != null ? u.ToString() : "");
             }
-            catch { return ""; }
+            catch
+            {
+                // Fallback por si en otra máquina sí hay propiedad Units
+                try
+                {
+                    var prop = p.GetType().GetProperty("Units");
+                    if (prop != null)
+                    {
+                        var v = prop.GetValue(p, null);
+                        return v != null ? v.ToString() : "";
+                    }
+                }
+                catch { }
+                return "";
+            }
         }
+
+
 
         private double GetVal(Inventor.Parameter p)
         {

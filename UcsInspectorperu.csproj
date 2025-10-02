@@ -33,6 +33,21 @@
 		<Compile Include="StandardAddInServer.cs" />
 		<Compile Include="Ui\UcsForm.cs" />
 	</ItemGroup>
+	<ItemGroup>
+	  <COMReference Include="stdole">
+	    <WrapperTool>tlbimp</WrapperTool>
+	    <VersionMinor>0</VersionMinor>
+	    <VersionMajor>2</VersionMajor>
+	    <Guid>00020430-0000-0000-c000-000000000046</Guid>
+	    <Lcid>0</Lcid>
+	    <Isolated>false</Isolated>
+	    <EmbedInteropTypes>true</EmbedInteropTypes>
+	  </COMReference>
+	</ItemGroup>
+	<ItemGroup>
+	  <EmbeddedResource Include="Res\UcsInspectorperu.res.ucs16.png" />
+	  <EmbeddedResource Include="Res\UcsInspectorperu.res.ucs32.png" />
+	</ItemGroup>
 
 	<!-- Recursos WinForms -->
 	<ItemGroup>
@@ -55,6 +70,7 @@
 			<EmbedInteropTypes>false</EmbedInteropTypes>
 			<Private>true</Private>
 		</Reference>
+		<Reference Include="System.Web.Extensions" />
 	</ItemGroup>
 
 	<!-- Rutas AddIns (dos variantes); elegimos una -->
@@ -76,22 +92,12 @@
 		<MakeDir Directories="$(InventorAddinsDir)" />
 
 		<!-- Copia DLL -->
-		<Copy SourceFiles="$(TargetPath)"
-			  DestinationFiles="$(InventorAddinsDir)\$(TargetFileName)"
-			  OverwriteReadOnlyFiles="true"
-			  SkipUnchangedFiles="false" />
+		<Copy SourceFiles="$(TargetPath)" DestinationFiles="$(InventorAddinsDir)\$(TargetFileName)" OverwriteReadOnlyFiles="true" SkipUnchangedFiles="false" />
 
 		<!-- Copia .addin -->
-		<Copy SourceFiles="$(ProjectDir)Autodesk.UcsInspectorperu.Inventor.addin"
-			  DestinationFiles="$(InventorAddinsDir)\$(AddinFileName)"
-			  OverwriteReadOnlyFiles="true"
-			  SkipUnchangedFiles="false" />
+		<Copy SourceFiles="$(ProjectDir)Autodesk.UcsInspectorperu.Inventor.addin" DestinationFiles="$(InventorAddinsDir)\$(AddinFileName)" OverwriteReadOnlyFiles="true" SkipUnchangedFiles="false" />
 
 		<!-- PDB (opcional) -->
-		<Copy Condition="Exists('$(TargetDir)$(TargetName).pdb')"
-			  SourceFiles="$(TargetDir)$(TargetName).pdb"
-			  DestinationFiles="$(InventorAddinsDir)\$(TargetName).pdb"
-			  OverwriteReadOnlyFiles="true"
-			  SkipUnchangedFiles="true" />
+		<Copy Condition="Exists('$(TargetDir)$(TargetName).pdb')" SourceFiles="$(TargetDir)$(TargetName).pdb" DestinationFiles="$(InventorAddinsDir)\$(TargetName).pdb" OverwriteReadOnlyFiles="true" SkipUnchangedFiles="true" />
 	</Target>
 </Project>
