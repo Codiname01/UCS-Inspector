@@ -6,6 +6,9 @@ using System.Runtime.InteropServices;
 using System.Runtime.ExceptionServices;
 using System.Windows.Forms;
 using Inventor;
+using System.Web.Script.Serialization; // referencia en el proyecto: System.Web.Extensions
+using System.Windows.Forms;            // Clipboard
+
 
 // ALIAS seguros con Inventor
 using SysEnv = System.Environment;
@@ -236,15 +239,18 @@ namespace UcsInspectorperu
             try
             {
                 var asm = typeof(StandardAddInServer).Assembly;
-                // Buscar por sufijo para no depender del namespace exacto
                 string name = asm.GetManifestResourceNames()
                                  .FirstOrDefault(n => n.EndsWith(resourceNameEndsWith, StringComparison.OrdinalIgnoreCase));
                 if (name == null) { Log("Icono no encontrado (sufijo): " + resourceNameEndsWith); return null; }
 
                 using (var s = asm.GetManifestResourceStream(name))
                 using (var img = System.Drawing.Image.FromStream(s))
+                using (var bmp24 = new System.Drawing.Bitmap(img.Width, img.Height, System.Drawing.Imaging.PixelFormat.Format24bppRgb))
+                using (var g = System.Drawing.Graphics.FromImage(bmp24))
                 {
-                    return (stdole.IPictureDisp)AxHostWrapper.GetIPictureDispFromPicture(img);
+                    g.Clear(System.Drawing.Color.Transparent);
+                    g.DrawImage(img, 0, 0, img.Width, img.Height); // sin alpha al IPictureDisp
+                    return (stdole.IPictureDisp)AxHostWrapper.GetIPictureDispFromPicture(bmp24);
                 }
             }
             catch (Exception ex)
@@ -254,6 +260,7 @@ namespace UcsInspectorperu
             }
         }
 
+
         private class AxHostWrapper : AxHost
         {
             private AxHostWrapper() : base("") { }
@@ -262,5 +269,9 @@ namespace UcsInspectorperu
                 return AxHost.GetIPictureDispFromPicture(img);
             }
         }
+
+
+        
+
     }
 }
