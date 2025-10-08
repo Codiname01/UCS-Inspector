@@ -138,8 +138,8 @@ namespace UcsInspectorperu
                 TryAddToRibbon("ZeroDoc", "id_TabToolsZeroDoc", "UcsInspectorperu:PanelZero");
                 TryAddToRibbon("Drawing", "id_TabTools", "UcsInspectorperu:PanelDrw");
 
-                // Intentar crear atajo Ctrl+Shift+U (si la API está disponible)
-                TryEnsureShortcut();
+                // Hotkey global (Ctrl+Shift+U por defecto; configurable en settings.json)
+                SetupGlobalHotkey();
 
                 Log("Activate() OK");
             }
@@ -152,70 +152,10 @@ namespace UcsInspectorperu
             }
         }
 
-        private void TryAddToRibbon(string ribbonName, string tabId, string panelInternalName)
-        {
-            try
-            {
-                var rb = _app.UserInterfaceManager.Ribbons[ribbonName];
-                var tab = rb.RibbonTabs[tabId];
-
-                RibbonPanel panel;
-                try { panel = tab.RibbonPanels["id_PanelPgmAddIns"]; } // panel integrado de Add-Ins
-                catch { panel = tab.RibbonPanels.Add("Add-Ins", panelInternalName, _clientId); }
-
-                bool already = false;
-                foreach (CommandControl c in panel.CommandControls)
-                    if (c.InternalName == _btn.InternalName) { already = true; break; }
-
-                if (!already) panel.CommandControls.AddButton(_btn, true);
-
-                Log("Ribbon OK: " + ribbonName + "/" + tabId);
-            }
-            catch (Exception ex)
-            {
-                Log("Ribbon skip " + ribbonName + "/" + tabId + ": " + ex.Message);
-            }
-        }
-
-        // --- Crear atajo por reflexión si Inventor expone KeyboardShortcuts
-        private void TryEnsureShortcut()
-        {
-            try
-            {
-                var uim = _app.UserInterfaceManager;
-                var ksObj = uim.GetType().InvokeMember("KeyboardShortcuts",
-                    BindingFlags.GetProperty, null, uim, new object[0]);
-
-                if (ksObj == null) { Log("KeyboardShortcuts no disponible."); return; }
-
-                // ¿ya existe un atajo para nuestro botón?
-                foreach (object item in (System.Collections.IEnumerable)ksObj)
-                {
-                    var def = item.GetType().GetProperty("CommandDefinition")?.GetValue(item, null);
-                    var inName = def?.GetType().GetProperty("InternalName")?.GetValue(def, null) as string;
-                    if (string.Equals(inName, _btn.InternalName, StringComparison.OrdinalIgnoreCase))
-                        return; // ya está
-                }
-
-                // Intentar agregar "Ctrl+Shift+U"
-                try
-                {
-                    ksObj.GetType().InvokeMember("Add",
-                        BindingFlags.InvokeMethod, null, ksObj,
-                        new object[] { _btn, "Ctrl+Shift+U" });
-                    Log("Shortcut creado: Ctrl+Shift+U");
-                }
-                catch (Exception ex2)
-                {
-                    Log("No se pudo crear shortcut por API: " + ex2.Message);
-                }
-            }
-            catch (Exception ex) { Log("TryEnsureShortcut() fallo: " + ex.Message); }
-        }
-
         public void Deactivate()
         {
             Log("Deactivate()");
+            try { HotkeyService.Unregister(); } catch { }
             try { if (_btn != null) Marshal.ReleaseComObject(_btn); } catch { }
             try { if (_app != null) Marshal.ReleaseComObject(_app); } catch { }
             _btn = null; _app = null;
@@ -270,8 +210,211 @@ namespace UcsInspectorperu
             }
         }
 
+        // al final del archivo, dentro del namespace UcsInspectorperu (puede ser clase interna)
+        // Clase auxiliar para registrar un atajo global del sistema (Ctrl+Shift+U por defecto).
+        internal static class HotkeyService
+        {
+            // Win32
+            [System.Runtime.InteropServices.DllImport("user32.dll")]
+            private static extern bool RegisterHotKey(System.IntPtr hWnd, int id, uint fsModifiers, uint vk);
 
-        
+            [System.Runtime.InteropServices.DllImport("user32.dll")]
+            private static extern bool UnregisterHotKey(System.IntPtr hWnd, int id);
+
+            private const int WM_HOTKEY = 0x0312;
+            private const uint MOD_ALT = 0x0001;
+            private const uint MOD_CONTROL = 0x0002;
+            private const uint MOD_SHIFT = 0x0004;
+
+            // Ventana oculta para recibir WM_HOTKEY
+            private sealed class MsgWnd : NativeWindow
+            {
+                private readonly ButtonDefinition _btn;
+
+                public MsgWnd(System.IntPtr parent, ButtonDefinition btn)
+                {
+                    _btn = btn;
+                    var cp = new CreateParams();
+                    cp.Parent = parent;             // colgarla del frame principal de Inventor
+                    CreateHandle(cp);
+                }
+
+                protected override void WndProc(ref Message m)
+                {
+                    if (m.Msg == WM_HOTKEY && _btn != null)
+                    {
+                        try { _btn.Execute(); } catch { /* no romper Inventor */ }
+                    }
+                    base.WndProc(ref m);
+                }
+            }
+
+            private static MsgWnd _wnd;
+            private static int _regId;
+
+            /// <summary>
+            /// Registra el atajo global. Ejemplos válidos: "Ctrl+Shift+U", "Alt+U", "Ctrl+I".
+            /// </summary>
+            public static void Register(Inventor.Application app, ButtonDefinition btn, string hotkeyText)
+            {
+                try
+                {
+                    Unregister(); // por si estaba registrado antes
+
+                    uint mods, vk;
+                    ParseHotkey(hotkeyText, out mods, out vk);
+
+                    // Crea la ventana receptora y registra el hotkey
+                    _wnd = new MsgWnd(new System.IntPtr(app.MainFrameHWND), btn);
+                    _regId = 1; // único id
+                    RegisterHotKey(_wnd.Handle, _regId, mods, vk);
+                }
+                catch
+                {
+                    // Silencioso: si falla, el add-in sigue funcionando sin atajo global
+                }
+            }
+
+            /// <summary>
+            /// Libera el atajo global.
+            /// </summary>
+            public static void Unregister()
+            {
+                try
+                {
+                    if (_wnd != null && _regId != 0)
+                        UnregisterHotKey(_wnd.Handle, _regId);
+                }
+                catch { }
+                finally
+                {
+                    try { if (_wnd != null) _wnd.DestroyHandle(); } catch { }
+                    _wnd = null;
+                    _regId = 0;
+                }
+            }
+
+            /// <summary>
+            /// Convierte una cadena tipo "Ctrl+Shift+U" en modificadores y tecla virtual.
+            /// </summary>
+            private static void ParseHotkey(string s, out uint mods, out uint vk)
+            {
+                mods = 0;
+                vk = (uint)Keys.U; // por defecto
+
+                try
+                {
+                    string txt = (s ?? "").Trim().ToUpperInvariant();
+                    if (txt.Length == 0) { mods = MOD_CONTROL | MOD_SHIFT; return; }
+
+                    string[] parts = txt.Split(new char[] { '+', '-', ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                    foreach (var p0 in parts)
+                    {
+                        string p = p0.Trim();
+                        if (p == "CTRL" || p == "CONTROL") { mods |= MOD_CONTROL; continue; }
+                        if (p == "SHIFT") { mods |= MOD_SHIFT; continue; }
+                        if (p == "ALT") { mods |= MOD_ALT; continue; }
+
+                        // Tecla principal
+                        Keys k;
+                        if (Enum.TryParse<Keys>(p, true, out k))
+                        {
+                            vk = (uint)k;
+                        }
+                        else if (p.Length == 1)
+                        {
+                            vk = (uint)char.ToUpperInvariant(p[0]);
+                        }
+                    }
+
+                    if (mods == 0) mods = MOD_CONTROL | MOD_SHIFT; // seguridad
+                }
+                catch
+                {
+                    mods = MOD_CONTROL | MOD_SHIFT; vk = (uint)Keys.U;
+                }
+            }
+        }
+
+
+      
+        // Añade esto dentro de StandardAddInServer (misma clase)
+
+        private void TryAddToRibbon(string ribbonName, string tabId, string panelInternalName)
+        {
+            try
+            {
+                var rb = _app.UserInterfaceManager.Ribbons[ribbonName];
+                var tab = rb.RibbonTabs[tabId];
+
+                RibbonPanel panel;
+                try { panel = tab.RibbonPanels["id_PanelPgmAddIns"]; } // panel integrado de Add-Ins
+                catch { panel = tab.RibbonPanels.Add("Add-Ins", panelInternalName, _clientId); }
+
+                bool already = false;
+                foreach (CommandControl c in panel.CommandControls)
+                    if (c.InternalName == _btn.InternalName) { already = true; break; }
+
+                if (!already) panel.CommandControls.AddButton(_btn, true);
+
+                Log("Ribbon OK: " + ribbonName + "/" + tabId);
+            }
+            catch (Exception ex)
+            {
+                Log("Ribbon skip " + ribbonName + "/" + tabId + ": " + ex.Message);
+            }
+        }
+
+        private void SetupGlobalHotkey()
+        {
+            try
+            {
+                bool enable = true;
+                string hotkey = "Ctrl+Shift+U";
+
+                // %LOCALAPPDATA%\UcsInspectorperu\settings.json
+                string cfgPath = SysPath.Combine(
+                    SysEnv.GetFolderPath(SysEnv.SpecialFolder.LocalApplicationData),
+                    "UcsInspectorperu", "settings.json");
+
+                try
+                {
+                    if (SysFile.Exists(cfgPath))
+                    {
+                        var js = SysFile.ReadAllText(cfgPath);
+
+                        if (js.IndexOf("\"UseGlobalHotkey\": false", StringComparison.OrdinalIgnoreCase) >= 0)
+                            enable = false;
+
+                        int k = js.IndexOf("\"GlobalHotkey\"", StringComparison.OrdinalIgnoreCase);
+                        if (k >= 0)
+                        {
+                            int q1 = js.IndexOf('"', k + 14);
+                            q1 = js.IndexOf('"', q1 + 1);
+                            int q2 = js.IndexOf('"', q1 + 1);
+                            if (q1 > 0 && q2 > q1) hotkey = js.Substring(q1 + 1, q2 - q1 - 1);
+                        }
+                    }
+                }
+                catch { /* settings corrupto → usa defaults */ }
+
+                if (enable)
+                {
+                    HotkeyService.Register(_app, _btn, hotkey);
+                    Log("Global hotkey activo: " + hotkey);
+                }
+                else
+                {
+                    Log("Global hotkey desactivado por settings.");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("SetupGlobalHotkey() fallo: " + ex.Message);
+            }
+        }
+
+
 
     }
 }

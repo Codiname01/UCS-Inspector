@@ -13,11 +13,17 @@ using System.Text;
 using System.IO;
 
 
+
 // Alias seguros
 using DrawColor = System.Drawing.Color;
 using WinTextBox = System.Windows.Forms.TextBox;
 using SysEnv = System.Environment;
 using SysPath = System.IO.Path;
+// Evitar choques con Inventor.*
+
+using SysFile = System.IO.File;
+using SysDir = System.IO.Directory;
+
 
 
 namespace UcsInspectorperu.Ui
@@ -33,6 +39,8 @@ namespace UcsInspectorperu.Ui
         private (double xo, double yo, double zo, double xa, double ya, double za)? _clipboard;
         private CheckBox chkDelta;
         private Button btnViewUcs;
+        private Panel pnlRecent;
+        private readonly List<Button> _recentBtns = new List<Button>();
 
 
 
@@ -40,6 +48,8 @@ namespace UcsInspectorperu.Ui
 
         // NUEVO: UI y estado
         private NumericUpDown numStepMm, numStepDeg;
+    
+
         private Button btnCenter, btnCopy, btnPaste, btnNext;
         private System.Windows.Forms.TextBox txtFilter;
         private readonly List<Inventor.UserCoordinateSystem> _allUcs = new List<Inventor.UserCoordinateSystem>();
@@ -52,7 +62,7 @@ namespace UcsInspectorperu.Ui
 
         private Inventor.UserCoordinateSystem _ucs;
         private Inventor.UnitsOfMeasure _uom;
-     
+
 
         public UcsForm(Inventor.Application app)
         {
@@ -60,8 +70,10 @@ namespace UcsInspectorperu.Ui
             Text = "UCS Inspector – Camarada Escate";
             Width = 700; Height = 440; FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = false;
             KeyPreview = true; // hotkeys
+            _cfg = UiSettings.Load();
 
-            // Filtro + combo + pick
+
+            // ---------------- Filtro + combo + pick ----------------
             txtFilter = new System.Windows.Forms.TextBox { Left = 12, Top = 12, Width = 220 };
             txtFilter.ForeColor = DrawColor.Gray; txtFilter.Text = "filtrar por nombre…";
             txtFilter.GotFocus += (s, e) => { if (txtFilter.ForeColor == DrawColor.Gray) { txtFilter.Text = ""; txtFilter.ForeColor = DrawColor.Black; } };
@@ -73,7 +85,11 @@ namespace UcsInspectorperu.Ui
             btnPick.Click += (s, e) => TryPickUcs();
             Controls.Add(txtFilter); Controls.Add(cboUcs); Controls.Add(btnPick);
 
-            // Filas offsets/ángulos
+            // Panel de “recientes”
+            pnlRecent = new Panel { Left = 12, Top = 40, Width = 520, Height = 22 };
+            Controls.Add(pnlRecent);
+
+            // ---------------- Filas offsets/ángulos ----------------
             MakeRow("X Offset", 55, out lblXo, out txtXo);
             MakeRow("Y Offset", 85, out lblYo, out txtYo);
             MakeRow("Z Offset", 115, out lblZo, out txtZo);
@@ -81,7 +97,7 @@ namespace UcsInspectorperu.Ui
             MakeRow("Y Angle", 195, out lblYa, out txtYa);
             MakeRow("Z Angle", 225, out lblZa, out txtZa);
 
-            // Nudge buttons a la derecha de cada fila
+            // ---------------- Nudge buttons ----------------
             AddNudgePair(555, 52, "-X", "+X",
                 () => Nudge((Inventor.Parameter)txtXo.Tag, -(double)numStepMm.Value, false),
                 () => Nudge((Inventor.Parameter)txtXo.Tag, (double)numStepMm.Value, false), out btnXm, out btnXp);
@@ -106,7 +122,7 @@ namespace UcsInspectorperu.Ui
                 () => Nudge((Inventor.Parameter)txtZa.Tag, -(double)numStepDeg.Value, true),
                 () => Nudge((Inventor.Parameter)txtZa.Tag, (double)numStepDeg.Value, true), out btnRzm, out btnRzp);
 
-            // Pasos y acciones
+            // ---------------- Pasos y acciones ----------------
             numStepMm = new NumericUpDown { Left = 12, Top = 270, Width = 90, DecimalPlaces = 3, Minimum = 0.001M, Maximum = 10000M, Increment = 0.1M, Value = 1.000M };
             numStepDeg = new NumericUpDown { Left = 110, Top = 270, Width = 90, DecimalPlaces = 2, Minimum = 0.01M, Maximum = 360M, Increment = 0.1M, Value = 1.00M };
             var lblMm = new Label { Left = 12, Top = 250, Width = 90, Text = "Paso mm" };
@@ -119,90 +135,117 @@ namespace UcsInspectorperu.Ui
             btnNext = new Button { Left = 495, Top = 270, Width = 90, Text = "Siguiente" };
             btnCenter.Click += (s, e) => CenterOnUcs(_ucs);
             btnCopy.Click += (s, e) => _clipboard = CopyUcs();
-            // en btnPaste.Click:
-            (double xo, double yo, double zo, double xa, double ya, double za) data;
-            ClipPacket raw;
-            if (TryGetFromClipboard(out data, out raw))
-            {
-                // Si hay expresiones, escríbelas literal; si no, pega valores
-                Action<WinTextBox, string, bool, double> apply = (tb, exp, ang, val) =>
-                {
-                    var p = (Inventor.Parameter)tb.Tag;
-                    if (p == null) return;
-                    if (!string.IsNullOrWhiteSpace(exp)) { p.Expression = exp.StartsWith("=") ? exp.Substring(1).Trim() : exp; }
-                    else { SetVal(p, val, ang); }
-                };
-                apply(txtXo, raw.xoExp, false, data.xo);
-                apply(txtYo, raw.yoExp, false, data.yo);
-                apply(txtZo, raw.zoExp, false, data.zo);
-                apply(txtXa, raw.xaExp, true, data.xa);
-                apply(txtYa, raw.yaExp, true, data.ya);
-                apply(txtZa, raw.zaExp, true, data.za);
-
-                ActiveDoc.Update(); LoadValues();
-            }
-            else if (_clipboard.HasValue) { PasteUcs(_clipboard.Value); }
-            else MessageBox.Show("No hay datos de UCS en el portapapeles.");
-
-            btnNext.Click += (s, e) => NextUcs();
             Controls.AddRange(new Control[] { btnCenter, btnCopy, btnPaste, btnNext });
 
-            btnRefresh = new Button { Left = 12, Top = 315, Width = 140, Text = "Actualizar" };
-            btnApply = new Button { Left = 530, Top = 315, Width = 140, Text = "Aplicar" };
-            btnHelp = new Button { Left = 405, Top = 315, Width = 115, Text = "Ayuda (F1)" };
-            btnHelp.Click += (s, e) => ShowHelp();
-            Controls.Add(btnHelp);
+            // CheckBox "Pegar Δ" (delta)
+            chkDelta = new CheckBox { Left = 12, Top = 345, Width = 120, Text = "Pegar Δ" };
+            Controls.Add(chkDelta);
 
-            btnRefresh.Click += (s, e) => LoadValues();
-            btnApply.Click += (s, e) => ApplyChanges();
-            Controls.Add(btnRefresh); Controls.Add(btnApply);
+            // === Aplicar settings a la UI ===
+            try
+            {
+                // Paso mm
+                if (numStepMm != null)
+                {
+                    var v = _cfg.StepMm;
+                    v = Math.Min((double)numStepMm.Maximum, Math.Max((double)numStepMm.Minimum, v));
+                    numStepMm.Value = (decimal)v;
+                }
+                // Paso grados
+                if (numStepDeg != null)
+                {
+                    var v = _cfg.StepDeg;
+                    v = Math.Min((double)numStepDeg.Maximum, Math.Max((double)numStepDeg.Minimum, v));
+                    numStepDeg.Value = (decimal)v;
+                }
+                // Modo “Pegar Δ”
+                if (chkDelta != null) chkDelta.Checked = _cfg.PasteAsDelta;
 
-            LoadUcsList();
+                // Posición/tamaño de la ventana
+                if (_cfg.Width > 0 && _cfg.Height > 0) { this.Width = _cfg.Width; this.Height = _cfg.Height; }
+                if (_cfg.Left >= 0 && _cfg.Top >= 0)
+                {
+                    this.StartPosition = FormStartPosition.Manual;
+                    this.Left = _cfg.Left; this.Top = _cfg.Top;
+                }
+            }
+            catch { /* ignora si algo no cuadra */ }
 
-            var btnCopyExpr = new Button { Left = 305, Top = 315, Width = 90, Text = "Copiar expr" };
-            btnCopyExpr.Click += (s, e) => CopyUcsExpressionsToClipboard();
-            Controls.Add(btnCopyExpr);
+            // Guardado "en caliente" y al cerrar
+            numStepMm.ValueChanged += (s, e) => SaveSettings();
+            numStepDeg.ValueChanged += (s, e) => SaveSettings();
+            chkDelta.CheckedChanged += (s, e) => SaveSettings();
+            this.FormClosing += (s, e) => SaveSettings();
 
-            // Dentro del constructor, una sola vez:
+            // Pegar (ABS o Δ) — 1 sola suscripción
             btnPaste.Click += (s, e) =>
             {
-                // NOMBRES DIFERENTES para evitar CS0136
                 (double xo, double yo, double zo, double xa, double ya, double za) clipVals;
                 ClipPacket clipPkt;
 
                 if (TryGetFromClipboard(out clipVals, out clipPkt))
                 {
-                    if (chkDelta.Checked)
+                    var tm = _app.TransactionManager; Inventor.Transaction tx = null;
+                    try
                     {
-                        PasteAsDelta(clipVals);
-                    }
-                    else
-                    {
-                        // Si hay expresiones en el portapapeles, respétalas; si no, pega valores
-                        Action<WinTextBox, string, bool, double> apply = (tb, expr, isAng, val) =>
-                        {
-                            var p = (Inventor.Parameter)tb.Tag;
-                            if (p == null) return;
-                            if (clipPkt != null && !string.IsNullOrWhiteSpace(expr))
-                                p.Expression = expr.StartsWith("=") ? expr.Substring(1).Trim() : expr;
-                            else
-                                SetVal(p, val, isAng);
-                        };
+                        tx = tm.StartTransaction((Inventor._Document)ActiveDoc,
+                            chkDelta.Checked ? "UCS paste Δ" : "UCS paste");
 
-                        apply(txtXo, clipPkt != null ? clipPkt.xoExp : null, false, clipVals.xo);
-                        apply(txtYo, clipPkt != null ? clipPkt.yoExp : null, false, clipVals.yo);
-                        apply(txtZo, clipPkt != null ? clipPkt.zoExp : null, false, clipVals.zo);
-                        apply(txtXa, clipPkt != null ? clipPkt.xaExp : null, true, clipVals.xa);
-                        apply(txtYa, clipPkt != null ? clipPkt.yaExp : null, true, clipVals.ya);
-                        apply(txtZa, clipPkt != null ? clipPkt.zaExp : null, true, clipVals.za);
+                        if (chkDelta.Checked)
+                        {
+                            // Aplica como DELTA: suma el valor del portapapeles a lo actual
+                            Action<WinTextBox, double, bool> add = (tb, dv, isAng) =>
+                            {
+                                var p = (Inventor.Parameter)tb.Tag; if (p == null) return;
+                                SetVal(p, GetVal(p) + dv, isAng);
+                            };
+                            add(txtXo, clipVals.xo, false); add(txtYo, clipVals.yo, false); add(txtZo, clipVals.zo, false);
+                            add(txtXa, clipVals.xa, true); add(txtYa, clipVals.ya, true); add(txtZa, clipVals.za, true);
+                        }
+                        else
+                        {
+                            // Pega ABSOLUTO: si hay expresiones, respétalas; si no, valores
+                            Action<WinTextBox, string, bool, double> apply = (tb, expr, isAng, val) =>
+                            {
+                                var p = (Inventor.Parameter)tb.Tag; if (p == null) return;
+                                if (clipPkt != null && !string.IsNullOrWhiteSpace(expr))
+                                    p.Expression = expr.StartsWith("=") ? expr.Substring(1).Trim() : expr;
+                                else
+                                    SetVal(p, val, isAng);
+                            };
+                            apply(txtXo, clipPkt != null ? clipPkt.xoExp : null, false, clipVals.xo);
+                            apply(txtYo, clipPkt != null ? clipPkt.yoExp : null, false, clipVals.yo);
+                            apply(txtZo, clipPkt != null ? clipPkt.zoExp : null, false, clipVals.zo);
+                            apply(txtXa, clipPkt != null ? clipPkt.xaExp : null, true, clipVals.xa);
+                            apply(txtYa, clipPkt != null ? clipPkt.yaExp : null, true, clipVals.ya);
+                            apply(txtZa, clipPkt != null ? clipPkt.zaExp : null, true, clipVals.za);
+                        }
 
                         ActiveDoc.Update();
+                        tx.End();
                         LoadValues();
+                        SaveSettings(); // por si cambiaste el chkΔ o los pasos
                     }
+                    catch { if (tx != null) tx.Abort(); throw; }
                 }
                 else if (_clipboard.HasValue)
                 {
-                    PasteUcs(_clipboard.Value);
+                    if (chkDelta.Checked)
+                    {
+                        var dv = _clipboard.Value;
+                        Action<WinTextBox, double, bool> add = (tb, inc, ang) =>
+                        {
+                            var p = (Inventor.Parameter)tb.Tag; if (p == null) return;
+                            SetVal(p, GetVal(p) + inc, ang);
+                        };
+                        add(txtXo, dv.xo, false); add(txtYo, dv.yo, false); add(txtZo, dv.zo, false);
+                        add(txtXa, dv.xa, true); add(txtYa, dv.ya, true); add(txtZa, dv.za, true);
+                        ActiveDoc.Update(); LoadValues();
+                    }
+                    else
+                    {
+                        PasteUcs(_clipboard.Value);
+                    }
                 }
                 else
                 {
@@ -210,16 +253,200 @@ namespace UcsInspectorperu.Ui
                 }
             };
 
-            // Botón: Vista = UCS (Z arriba, X a la derecha)
-            btnViewUcs = new Button { Left = 210, Top = 345, Width = 120, Text = "Vista = UCS" };
+            // Siguiente
+            btnNext.Click += (s, e) => NextUcs();
+
+            // ---------------- Acciones inferiores ----------------
+            btnRefresh = new Button { Left = 12, Top = 315, Width = 140, Text = "Actualizar" };
+            btnApply = new Button { Left = 530, Top = 315, Width = 140, Text = "Aplicar" };
+            btnHelp = new Button { Left = 405, Top = 315, Width = 115, Text = "Ayuda (F1)" };
+            btnHelp.Click += (s, e) => ShowHelp();
+            btnRefresh.Click += (s, e) => LoadValues();
+            btnApply.Click += (s, e) => ApplyChanges();
+            Controls.Add(btnHelp); Controls.Add(btnRefresh); Controls.Add(btnApply);
+
+            // Copiar expresiones (JSON interoperable)
+            var btnCopyExpr = new Button { Left = 305, Top = 315, Width = 90, Text = "Copiar expr" };
+            btnCopyExpr.Click += (s, e) => CopyUcsExpressionsToClipboard();
+            Controls.Add(btnCopyExpr);
+
+            // Vista = UCS (Z arriba, X derecha)
+            var btnViewUcs = new Button { Left = 210, Top = 345, Width = 120, Text = "Vista = UCS" };
             btnViewUcs.Click += (s, e) => AlignViewToUcs(_ucs);
             Controls.Add(btnViewUcs);
 
+            // Cargar lista y dibujar “recientes”
+            LoadUcsList();
+            RefreshRecentButtons();
 
-
-
+            // ENTER aplica por fila (si quieres esta UX)
+            txtXo.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { ApplyOneFromBox(txtXo, false); e.Handled = true; } };
+            txtYo.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { ApplyOneFromBox(txtYo, false); e.Handled = true; } };
+            txtZo.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { ApplyOneFromBox(txtZo, false); e.Handled = true; } };
+            txtXa.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { ApplyOneFromBox(txtXa, true); e.Handled = true; } };
+            txtYa.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { ApplyOneFromBox(txtYa, true); e.Handled = true; } };
+            txtZa.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { ApplyOneFromBox(txtZa, true); e.Handled = true; } };
         }
 
+
+        // ======= Settings del UI (persistencia en JSON) =======
+        [DataContract]
+        private sealed class UiSettings
+        {
+            [DataMember(Order = 0)] public double StepMm { get; set; } = 1.0;
+            [DataMember(Order = 1)] public double StepDeg { get; set; } = 1.0;
+            [DataMember(Order = 2)] public bool PasteAsDelta { get; set; } = false;
+
+            [DataMember(Order = 3)] public int Left { get; set; } = -1;
+            [DataMember(Order = 4)] public int Top { get; set; } = -1;
+            [DataMember(Order = 5)] public int Width { get; set; } = 700;
+            [DataMember(Order = 6)] public int Height { get; set; } = 440;
+
+            [DataMember(Order = 10)] public bool StartWithLastUcs { get; set; } = true;
+            [DataMember(Order = 11)] public int RecentMax { get; set; } = 3;
+            [DataMember(Order = 12)] public string[] RecentUcs { get; set; } = Array.Empty<string>();
+
+            [DataMember(Order = 20)] public bool UseGlobalHotkey { get; set; } = true;
+            [DataMember(Order = 21)] public string GlobalHotkey { get; set; } = "Ctrl+Shift+U";
+     
+            internal static string SettingsPath => SysPath.Combine(
+                SysEnv.GetFolderPath(SysEnv.SpecialFolder.LocalApplicationData),
+                "UcsInspectorperu", "settings.json");
+
+            public static UiSettings Load()
+            {
+                try
+                {
+                    if (SysFile.Exists(SettingsPath))
+                    {
+                        using (var fs = SysFile.OpenRead(SettingsPath))
+                        {
+                            var ser = new DataContractJsonSerializer(typeof(UiSettings));
+                            return (UiSettings)(ser.ReadObject(fs) ?? new UiSettings());
+                        }
+                    }
+                }
+                catch { }
+                return new UiSettings();
+            }
+
+            public void Save()
+            {
+                try
+                {
+                    var dir = SysPath.GetDirectoryName(SettingsPath);
+                    if (!string.IsNullOrEmpty(dir)) SysDir.CreateDirectory(dir);
+
+                    using (var fs = SysFile.Create(SettingsPath))
+                    {
+                        var ser = new DataContractJsonSerializer(typeof(UiSettings));
+                        ser.WriteObject(fs, this);
+                    }
+                }
+                catch { }
+            }
+        }
+
+
+        // campo único (evita ambigüedad CS0229)
+        private UiSettings _cfg;
+
+
+        private string SettingsPath()
+        {
+            string dir = SysPath.Combine(
+                SysEnv.GetFolderPath(SysEnv.SpecialFolder.LocalApplicationData),
+                "UcsInspectorperu");
+            try { SysDir.CreateDirectory(dir); } catch { }
+            return SysPath.Combine(dir, "settings.json");
+        }
+
+        private void LoadSettings()
+        {
+            try
+            {
+                var p = SettingsPath();
+                if (!SysFile.Exists(p)) return;
+
+                var ser = new DataContractJsonSerializer(typeof(UiSettings));
+                using (var fs = SysFile.OpenRead(p))
+                    _cfg = (UiSettings)ser.ReadObject(fs);
+
+                if (_cfg.RecentUcs == null) _cfg.RecentUcs = new string[0];
+                if (_cfg.RecentMax <= 0) _cfg.RecentMax = 3;
+            }
+            catch { /* usa defaults si falla */ }
+        }
+
+        private void SaveSettings()
+        {
+            try
+            {
+                // vuelca UI -> _cfg
+                if (numStepMm != null) _cfg.StepMm = (double)numStepMm.Value;
+                if (numStepDeg != null) _cfg.StepDeg = (double)numStepDeg.Value;
+                if (chkDelta != null) _cfg.PasteAsDelta = chkDelta.Checked;
+
+                _cfg.Left = this.Left; _cfg.Top = this.Top;
+                _cfg.Width = this.Width; _cfg.Height = this.Height;
+
+                var ser = new DataContractJsonSerializer(typeof(UiSettings));
+                using (var fs = SysFile.Create(SettingsPath()))
+                    ser.WriteObject(fs, _cfg);
+            }
+            catch { /* ignora errores de escritura */ }
+        }
+
+        private void TrackRecentUcs(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name) || _cfg == null) return;
+
+            var list = new List<string>(_cfg.RecentUcs ?? Array.Empty<string>());
+            list.RemoveAll(s => string.Equals(s, name, StringComparison.OrdinalIgnoreCase));
+            list.Insert(0, name);
+
+            int max = _cfg.RecentMax > 0 ? _cfg.RecentMax : 3;
+            while (list.Count > max) list.RemoveAt(list.Count - 1);
+
+            _cfg.RecentUcs = list.ToArray();
+            SaveSettings();
+            RefreshRecentButtons();
+        }
+
+        private void RefreshRecentButtons()
+        {
+            try
+            {
+                foreach (var b in _recentBtns) { pnlRecent.Controls.Remove(b); b.Dispose(); }
+                _recentBtns.Clear();
+
+                if (_cfg?.RecentUcs == null || _cfg.RecentUcs.Length == 0) return;
+
+                int left = 0;
+                foreach (var name in _cfg.RecentUcs)
+                {
+                    var b = new Button { Left = left, Top = 0, Height = 22, AutoSize = true, Text = name };
+                    b.Click += (s, e) =>
+                    {
+                        // selecciona ese UCS en el combo si existe
+                        for (int i = 0; i < cboUcs.Items.Count; i++)
+                        {
+                            var u = (Inventor.UserCoordinateSystem)cboUcs.Items[i];
+                            if (string.Equals(u.Name, name, StringComparison.OrdinalIgnoreCase))
+                            {
+                                cboUcs.SelectedIndex = i;
+                                return;
+                            }
+                        }
+                        MessageBox.Show("El UCS '" + name + "' no existe en este documento.");
+                    };
+                    pnlRecent.Controls.Add(b);
+                    _recentBtns.Add(b);
+                    left += b.Width + 6;
+                }
+            }
+            catch { }
+        }
 
         private void AlignViewToUcs(Inventor.UserCoordinateSystem u)
         {
@@ -344,58 +571,55 @@ namespace UcsInspectorperu.Ui
 
 
 
+        // ---------- Clipboard JSON (interoperable) ----------
+
         [DataContract]
-        public class ClipPacket
+        private class ClipPacket
         {
-            [DataMember] public string kind;   // "UCS-vals" o "UCS-expr"
-            [DataMember] public int ver;    // 2
+            // marcador y versión para reconocer nuestro JSON
+            [DataMember] public string kind = "UCS-expr";
+            [DataMember] public int ver = 2;
 
-            // valores con unidades tipo "92 mm" / "10 deg"
-            [DataMember] public string xo;
-            [DataMember] public string yo;
-            [DataMember] public string zo;
-            [DataMember] public string xa;
-            [DataMember] public string ya;
-            [DataMember] public string za;
+            // valores con unidades, p.ej. "92 mm" / "10 deg"
+            [DataMember] public string xo, yo, zo;
+            [DataMember] public string xa, ya, za;
 
-
-            // si copiaste expresiones, van aquí (opcional)
-            [DataMember] public string xoExp;
-            [DataMember] public string yoExp;
-            [DataMember] public string zoExp;
-            [DataMember] public string xaExp;
-            [DataMember] public string yaExp;
-            [DataMember] public string zaExp;
+            // expresiones literales (opcionales); p.ej. "=d0*2", "25 mm"
+            [DataMember] public string xoExp, yoExp, zoExp;
+            [DataMember] public string xaExp, yaExp, zaExp;
         }
 
+        // JSON helpers (sin System.Web.Extensions)
         private static string ToJson<T>(T obj)
         {
             try
             {
-                var ser = new DataContractJsonSerializer(typeof(T));
-                using (var ms = new MemoryStream())
+                var ser = new System.Runtime.Serialization.Json.DataContractJsonSerializer(typeof(T));
+                using (var ms = new System.IO.MemoryStream())
                 {
                     ser.WriteObject(ms, obj);
-                    return Encoding.UTF8.GetString(ms.ToArray());
+                    return System.Text.Encoding.UTF8.GetString(ms.ToArray());
                 }
             }
             catch { return null; }
         }
 
-        private static bool TryFromJson<T>(string s, out T obj)
+        private static bool TryFromJson<T>(string s, out T obj) where T : class
         {
-            obj = default(T);
+            obj = null;
             try
             {
-                var ser = new DataContractJsonSerializer(typeof(T));
-                using (var ms = new MemoryStream(Encoding.UTF8.GetBytes(s ?? "")))
+                var ser = new System.Runtime.Serialization.Json.DataContractJsonSerializer(typeof(T));
+                using (var ms = new System.IO.MemoryStream(System.Text.Encoding.UTF8.GetBytes(s)))
                 {
-                    obj = (T)ser.ReadObject(ms);
-                    return true;
+                    obj = ser.ReadObject(ms) as T;
+                    return obj != null;
                 }
             }
             catch { return false; }
         }
+
+
 
 
 
@@ -458,6 +682,7 @@ namespace UcsInspectorperu.Ui
         {
             _ucs = (Inventor.UserCoordinateSystem)cboUcs.SelectedItem;
             LoadValues();
+            if (_ucs != null) TrackRecentUcs(_ucs.Name);  // <-- aquí
         }
 
         private void ApplyFilter()
@@ -623,41 +848,61 @@ namespace UcsInspectorperu.Ui
             expr = (expr ?? "").Trim();
             if (string.IsNullOrWhiteSpace(expr)) return;
 
-            // 1) Expresión cruda (como en Inventor): pásala directo a Expression
-            if (LooksLikeRawExpression(expr))
+            try
             {
-                if (expr.StartsWith("=")) expr = expr.Substring(1).Trim();
-                p.Expression = expr;            // deja que Inventor la evalúe
-                return;
+                // Si el usuario escribe una expresión "cruda", déjala tal cual
+                if (LooksLikeRawExpression(expr))
+                {
+                    if (expr.StartsWith("=")) expr = expr.Substring(1).Trim();
+                    p.Expression = expr;      // Inventor la evalúa
+                    return;
+                }
+
+                // Caso relativo/absoluto con números
+                var units = UnitEnum(GetUnits(p), isAngle);
+                double cur = GetVal(p);
+
+                char op = expr[0];
+                if (op == '+' || op == '-' || op == '*' || op == '/')
+                {
+                    string rhs = expr.Substring(1).Trim();
+                    double result;
+
+                    if (op == '+' || op == '-')
+                    {
+                        // Delta con unidades: "+10", "-2.5 mm", etc.
+                        double delta = Convert.ToDouble(_uom.GetValueFromExpression(rhs, units));
+                        result = (op == '+') ? cur + delta : cur - delta;
+                    }
+                    else
+                    {
+                        // Factor puro: "*1.1" o "/2"
+                        double factor = double.Parse(rhs, CultureInfo.InvariantCulture);
+                        result = (op == '*') ? cur * factor : cur / factor;
+                    }
+
+                    // SIEMPRE por Expression con unidades para evitar E_INVALIDARG
+                    string txt = _uom.GetStringFromValue(result, units); // "123 mm" / "10 deg"
+                    p.Expression = txt;
+                }
+                else
+                {
+                    // Absoluto con unidades (o sin ellas pero con UnitsType)
+                    double abs = Convert.ToDouble(_uom.GetValueFromExpression(expr, units));
+                    string txt = _uom.GetStringFromValue(abs, units);
+                    p.Expression = txt;
+                }
             }
-
-            // 2) Operaciones relativas
-            string unitsStr = GetUnits(p);
-            var unitsEnum = UnitEnum(unitsStr, isAngle);
-
-            char op = expr[0];
-            double v = GetVal(p);
-
-            if (op == '+' || op == '-')
+            catch (System.Runtime.InteropServices.COMException ex)
             {
-                double delta = Convert.ToDouble(_uom.GetValueFromExpression(expr.Substring(1).Trim(), unitsEnum));
-                SetVal(p, (op == '+') ? v + delta : v - delta, isAngle);
+                MessageBox.Show("Inventor rechazó el valor para '" + SafeName(p) + "'.\n" + ex.Message);
             }
-            else if (op == '*' || op == '/')
+            catch (Exception ex)
             {
-                double factor;
-                if (!double.TryParse(expr.Substring(1).Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out factor))
-                    throw new FormatException("Factor inválido: " + expr);
-
-                SetVal(p, (op == '*') ? v * factor : v / factor, isAngle);
-            }
-            else
-            {
-                // 3) Absoluto numérico con unidades
-                double abs = Convert.ToDouble(_uom.GetValueFromExpression(expr, unitsEnum));
-                SetVal(p, abs, isAngle);
+                MessageBox.Show("Valor inválido: " + expr + "\n\n" + ex.Message);
             }
         }
+
 
         // --- NUDGES (pasos) + HOTKEYS + UNDO ---
 
@@ -712,6 +957,14 @@ namespace UcsInspectorperu.Ui
                 case (Keys.Alt | Keys.D6): Nudge(az, -stepDeg, true); return true; // RZ-
 
                 case Keys.Enter: NextUcs(); return true; // recorrer
+
+
+                // Edición rápida desde teclado
+                case (Keys.Control | Keys.C): btnCopy.PerformClick(); return true;      // Copiar valores/expr
+                case (Keys.Control | Keys.V): btnPaste.PerformClick(); return true;     // Pegar normal
+                case (Keys.Control | Keys.D): /* si tienes "Pegar Δ" */ /* btnPasteDelta.PerformClick(); */ return true;
+                case (Keys.Alt | Keys.V): AlignViewToUcs(_ucs); return true;        // Vista = UCS
+
             }
             return base.ProcessCmdKey(ref msg, keyData);
         }
@@ -841,8 +1094,8 @@ Rutas
         // dentro de TryGetFromClipboard: igual que ahora para convertir a números (pack.xo ...)
         // además devuélvelo aparte si hay expresiones:
         private bool TryGetFromClipboard(
-     out (double xo, double yo, double zo, double xa, double ya, double za) v,
-     out ClipPacket raw)
+      out (double xo, double yo, double zo, double xa, double ya, double za) v,
+      out ClipPacket raw)
         {
             v = (0, 0, 0, 0, 0, 0);
             raw = null;
@@ -850,41 +1103,46 @@ Rutas
             try
             {
                 if (!Clipboard.ContainsText()) return false;
-                var s = (Clipboard.GetText() ?? "").Trim();
-                if (s.Length == 0) return false;
+                var s = Clipboard.GetText();
+                if (string.IsNullOrWhiteSpace(s)) return false;
 
-                // ¿Es JSON nuestro?
+                // ¿Tiene forma de nuestro JSON?
                 if (s.StartsWith("{") && s.IndexOf("\"kind\"", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
                     ClipPacket pkt;
-                    if (TryFromJson<ClipPacket>(s, out pkt) && pkt != null && !string.IsNullOrEmpty(pkt.kind))
+                    if (TryFromJson<ClipPacket>(s, out pkt) &&
+                        pkt != null && !string.IsNullOrEmpty(pkt.kind) &&
+                        pkt.kind.StartsWith("UCS-", StringComparison.OrdinalIgnoreCase))
                     {
                         raw = pkt;
 
-                        // Convierte los strings con unidades a valores numéricos (mm/deg)
-                        double Val(string t, bool ang)
+                        // parsea "92 mm"/"10 deg" → dobles (unidades internas)
+                        double P(string text, bool ang)
                         {
-                            if (string.IsNullOrWhiteSpace(t)) return 0.0;
+                            if (string.IsNullOrWhiteSpace(text)) return 0.0;
                             var ut = ang ? Inventor.UnitsTypeEnum.kDegreeAngleUnits
                                          : Inventor.UnitsTypeEnum.kMillimeterLengthUnits;
-                            return Convert.ToDouble(_uom.GetValueFromExpression(t, ut));
+                            return System.Convert.ToDouble(_uom.GetValueFromExpression(text, ut));
                         }
 
-                        v = (Val(pkt.xo, false), Val(pkt.yo, false), Val(pkt.zo, false),
-                             Val(pkt.xa, true), Val(pkt.ya, true), Val(pkt.za, true));
+                        v = (
+                            P(pkt.xo, false),
+                            P(pkt.yo, false),
+                            P(pkt.zo, false),
+                            P(pkt.xa, true),
+                            P(pkt.ya, true),
+                            P(pkt.za, true)
+                        );
                         return true;
                     }
                 }
 
-                // No es nuestro JSON → no tocar
+                // no es nuestro formato → no lo procesamos
                 return false;
             }
-            catch
-            {
-                // nunca interrumpas la carga del add-in por esto
-                return false;
-            }
+            catch { return false; }
         }
+
 
 
         private void PasteUcs((double xo, double yo, double zo, double xa, double ya, double za) v)
@@ -1080,16 +1338,15 @@ Rutas
             {
                 if (p == null) return null;
                 var ut = UnitEnum(GetUnits(p), ang);
-                return _uom.GetStringFromValue(GetVal(p), ut); // "92 mm", "10 deg", etc.
+                return _uom.GetStringFromValue(GetVal(p), ut); // "92 mm", "10 deg"
             }
-
             string Exp(Inventor.Parameter p)
             {
                 if (p == null) return null;
                 try { return p.Expression; } catch { return null; }
             }
 
-            // valores con unidades (compat)
+            // valores con unidades (compatibilidad)
             pack.xo = Val((Inventor.Parameter)txtXo.Tag, false);
             pack.yo = Val((Inventor.Parameter)txtYo.Tag, false);
             pack.zo = Val((Inventor.Parameter)txtZo.Tag, false);
@@ -1097,7 +1354,7 @@ Rutas
             pack.ya = Val((Inventor.Parameter)txtYa.Tag, true);
             pack.za = Val((Inventor.Parameter)txtZa.Tag, true);
 
-            // expresiones literales
+            // expresiones (si existen)
             pack.xoExp = Exp((Inventor.Parameter)txtXo.Tag);
             pack.yoExp = Exp((Inventor.Parameter)txtYo.Tag);
             pack.zoExp = Exp((Inventor.Parameter)txtZo.Tag);
@@ -1111,6 +1368,34 @@ Rutas
         }
 
 
+
+        private const string PlaceholderText = "ej. +10 mm / *1.1 / 25 mm";
+
+        private static bool IsPlaceholderText(string s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return true;
+            s = s.Trim();
+            return s.IndexOf("ej.", StringComparison.OrdinalIgnoreCase) >= 0 || s == PlaceholderText;
+        }
+
+        private void ApplyOneFromBox(System.Windows.Forms.TextBox tb, bool isAngle)
+        {
+            if (tb == null) return;
+            var expr = (tb.Text ?? "").Trim();
+            if (tb.ForeColor == DrawColor.Gray || IsPlaceholderText(expr)) return;
+
+            var p = (Inventor.Parameter)tb.Tag;
+            var tm = _app.TransactionManager; Inventor.Transaction tx = null;
+            try
+            {
+                tx = tm.StartTransaction((Inventor._Document)ActiveDoc, "UCS apply (fila)");
+                ApplyOne(p, expr, isAngle);   // tu método existente
+                ActiveDoc.Update();
+                tx.End();
+                LoadValues();
+            }
+            catch { if (tx != null) tx.Abort(); throw; }
+        }
 
 
 
@@ -1157,7 +1442,6 @@ Rutas
                 try { _app.ScreenUpdating = su; } catch { }
             }
         }
-
 
 
 

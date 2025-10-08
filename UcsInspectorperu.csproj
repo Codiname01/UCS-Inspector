@@ -30,6 +30,7 @@
 	<!-- Código -->
 	<ItemGroup>
 		<Compile Include="AssemblyInfo.cs" />
+		<Compile Include="Config\Settings.cs" />
 		<Compile Include="StandardAddInServer.cs" />
 		<Compile Include="Ui\UcsForm.cs" />
 	</ItemGroup>
@@ -61,6 +62,12 @@
 		<None Include="UcsInspectorperu.X.manifest" />
 		<None Include="Autodesk.UcsInspectorperu.Inventor.addin" />
 		<None Include="Readme.txt" />
+	</ItemGroup>
+	<ItemGroup>
+	  <PackageReference Include="Microsoft.CodeAnalysis.NetAnalyzers" Version="9.0.0">
+	    <PrivateAssets>all</PrivateAssets>
+	    <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+	  </PackageReference>
 	</ItemGroup>
 
 	<!-- Interop Inventor -->
