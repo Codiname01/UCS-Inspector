@@ -31,7 +31,9 @@
 	<ItemGroup>
 		<Compile Include="AssemblyInfo.cs" />
 		<Compile Include="Config\Settings.cs" />
+		<Compile Include="HotkeyUtil.cs" />
 		<Compile Include="StandardAddInServer.cs" />
+		<Compile Include="Ui\GlobalHotkeys.cs" />
 		<Compile Include="Ui\UcsForm.cs" />
 	</ItemGroup>
 	<ItemGroup>
