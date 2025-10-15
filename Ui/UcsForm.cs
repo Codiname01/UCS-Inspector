@@ -28,6 +28,9 @@ using WinPanel = System.Windows.Forms.Panel;
 using WinTable = System.Windows.Forms.TableLayoutPanel;
 using WinTextBox = System.Windows.Forms.TextBox;
 
+using SysWin = System.Windows.Forms;
+using SysDraw = System.Drawing;
+
 
 
 
@@ -112,9 +115,11 @@ namespace UcsInspectorperu.Ui
 
         // Aliases GUI (evitan ambigüedad con Inventor)
 
+        private void btnMeasureMm_Click(object sender, EventArgs e) { MeasureDistanceToStepMm(); }
+        private void btnMeasureDeg_Click(object sender, EventArgs e) { MeasureAngleToStepDeg(); }
 
         // Recientes (nuevo layout)
-      
+
         // Estado
         private readonly List<Inventor.UserCoordinateSystem> _allUcs = new List<Inventor.UserCoordinateSystem>();
         private Inventor.UserCoordinateSystem _ucs;
@@ -131,51 +136,47 @@ namespace UcsInspectorperu.Ui
             Text = "UCS Inspector – Camarada Escate";
             AutoScaleMode = AutoScaleMode.Dpi;
             FormBorderStyle = FormBorderStyle.Sizable;
-            MinimumSize = new Size(640, 360);   // antes era grande; esto sí cabe bien en 1366×76
-            MaximizeBox = true;                                  // útil si el usuario quiere maximizar
+            MinimumSize = new Size(640, 360);
+            MaximizeBox = true;
             KeyPreview = true;
             DoubleBuffered = true;
-            SetStyle(System.Windows.Forms.ControlStyles.OptimizedDoubleBuffer |
-                     System.Windows.Forms.ControlStyles.AllPaintingInWmPaint, true);
-         
+            SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint, true);
+
             // ── Settings ──────────────────────────────────────────────────────────────
             _cfg = UiSettings.Load() ?? new UiSettings();
-            if (_cfg.RecentMax < 6) _cfg.RecentMax = 6;          // mínimo pedido
+            if (_cfg.RecentMax < 6) _cfg.RecentMax = 6;
 
-            // ── UI visual (sin coordenadas fijas) ─────────────────────────────────────
-            BuildLayout();                                       // crea y coloca todos los controles
+            // ── UI ────────────────────────────────────────────────────────────────────
+            BuildLayout();                 // crea y coloca los controles
+            this.AcceptButton = btnApply;  // Enter = Aplicar (sin usar mouse)
 
             // ToolTip compartido
-            _tt = new ToolTip
-            {
-                AutoPopDelay = 5000,
-                InitialDelay = 300,
-                ReshowDelay = 100,
-                ShowAlways = true
-            };
+            _tt = new ToolTip { AutoPopDelay = 5000, InitialDelay = 300, ReshowDelay = 100, ShowAlways = true };
 
             // ── Estado inicial desde settings ─────────────────────────────────────────
-            ApplySettingsToUi(_cfg);                             // pasos, pegar Δ, tamaño/posición, etc.
+            ApplySettingsToUi(_cfg);       // pasos, pegar Δ, tamaño/posición
+
+          
 
             // ── Datos ─────────────────────────────────────────────────────────────────
-            LoadUcsList();                                       // llena el combo y selecciona
-            RefreshRecentButtons();                              // barra de “recientes” (favoritos + MRU)
+            LoadUcsList();                 // llena el combo
+            RefreshRecentButtons();        // MRU + favoritos
 
             // ── Atajos ────────────────────────────────────────────────────────────────
-            WireHotkeysToChildren(this);                         // atajos locales
+            WireHotkeysToChildren(this);   // atajos locales
             this.Shown += (s, e) => RegisterGlobalHotkeysIfAny(); // globales si están habilitados en JSON
 
-            // ── Reflow / DPI / tamaño ─────────────────────────────────────────────────
+            // ── Reflow / DPI / tamaño ────────────────────────────────────────────────
             this.Shown += (s, e) => UpdateLayoutForWidth();
             this.Resize += (s, e) => UpdateLayoutForWidth();
 
-            // ── Enter aplica por-caja (opcional, ya lo tienes implementado) ──────────
+            // ── Enter aplica por-caja (tu método existente) ──────────────────────────
             HookEnterEdits();
 
-            // ── Guardado “en caliente” ────────────────────────────────────────────────
-            if (numStepMm != null) numStepMm.ValueChanged += (s, e) => SaveSettingsFromUi();
-            if (numStepDeg != null) numStepDeg.ValueChanged += (s, e) => SaveSettingsFromUi();
-            if (chkDelta != null) chkDelta.CheckedChanged += (s, e) => SaveSettingsFromUi();
+            // ── Guardado SÓLO al salir o con Enter (evita el bug 45→54) ──────────────
+            if (numStepMm != null) { numStepMm.Leave += (s, e) => SaveSettingsFromUi(); numStepMm.KeyDown += OnSaveOnEnter; }
+            if (numStepDeg != null) { numStepDeg.Leave += (s, e) => SaveSettingsFromUi(); numStepDeg.KeyDown += OnSaveOnEnter; }
+            if (chkDelta != null) { chkDelta.CheckedChanged += (s, e) => SaveSettingsFromUi(); }
 
             // ── Limpieza ──────────────────────────────────────────────────────────────
             this.FormClosed += (s, e) =>
@@ -185,6 +186,109 @@ namespace UcsInspectorperu.Ui
                 _tt = null;
             };
         }
+
+
+
+
+        private void OnSaveOnEnter(object sender, KeyEventArgs e)
+        {
+            if (e.KeyCode == Keys.Enter)
+            {
+                SaveSettingsFromUi(); // solo guarda; NO recarga la UI aquí
+                e.Handled = true;
+            }
+        }
+
+
+
+        // Redondea y respeta límites del NumericUpDown
+        private static decimal ClampToNumeric(NumericUpDown nud, decimal v)
+        {
+            if (nud == null) return v;
+            if (v < nud.Minimum) v = nud.Minimum;
+            if (v > nud.Maximum) v = nud.Maximum;
+            return decimal.Round(v, nud.DecimalPlaces);
+        }
+
+        // Setters centralizados + guardado
+        private void SetStepMm(double mm)
+        {
+            if (numStepMm != null)
+            {
+                numStepMm.Value = ClampToNumeric(numStepMm, (decimal)mm);
+                SaveSettingsFromUi(); // solo guarda, NO recarga UI
+            }
+        }
+        private void SetStepDeg(double deg)
+        {
+            if (numStepDeg != null)
+            {
+                // Útil: normaliza a [-360, 360]
+                while (deg > 360.0) deg -= 360.0;
+                while (deg < -360.0) deg += 360.0;
+
+                numStepDeg.Value = ClampToNumeric(numStepDeg, (decimal)deg);
+                SaveSettingsFromUi();
+            }
+        }
+
+
+        // Distancia mínima entre dos picks (mm) y la pone en numStepMm
+        // Distancia mínima entre dos picks (mm) y la pone en numStepMm
+        private void MeasureDistanceToStepMm()
+        {
+            try
+            {
+                var cm = _app.CommandManager;
+                object a = cm.Pick(SelectionFilterEnum.kAllEntitiesFilter, "Selecciona el primer elemento");
+                object b = cm.Pick(SelectionFilterEnum.kAllEntitiesFilter, "Selecciona el segundo elemento");
+
+                // Devuelve distancia en unidades de base (cm)
+                double dDb = _app.MeasureTools.GetMinimumDistance(a, b);
+
+                // Convertir cm (DB) → mm usando el UnitsOfMeasure del documento
+                double mm = dDb;
+                var doc = _app.ActiveDocument as Inventor.Document;
+                if (doc != null && doc.UnitsOfMeasure != null)
+                {
+                    mm = doc.UnitsOfMeasure.ConvertUnits(
+                        dDb, UnitsTypeEnum.kDatabaseLengthUnits, UnitsTypeEnum.kMillimeterLengthUnits);
+                }
+                else
+                {
+                    // Fallback seguro (cm → mm)
+                    mm = dDb * 10.0;
+                }
+
+                SetStepMm(mm); // tu setter que guarda sin recargar la UI
+            }
+            catch (System.Runtime.InteropServices.COMException)
+            {
+                // Pick cancelado / E_FAIL: ignorar
+            }
+            catch { /* opcional: log */ }
+        }
+
+        // Ángulo entre dos picks (grados) y lo pone en numStepDeg (esto sí estaba ok)
+        private void MeasureAngleToStepDeg()
+        {
+            try
+            {
+                var cm = _app.CommandManager;
+                object a = cm.Pick(SelectionFilterEnum.kAllEntitiesFilter, "Elemento A (cara/eje/arista)");
+                object b = cm.Pick(SelectionFilterEnum.kAllEntitiesFilter, "Elemento B (cara/eje/arista)");
+
+                double rad = _app.MeasureTools.GetAngle(a, b); // radianes
+                double deg = rad * 180.0 / Math.PI;
+
+                SetStepDeg(deg);
+            }
+            catch (System.Runtime.InteropServices.COMException) { }
+            catch { }
+        }
+
+
+
 
 
 
@@ -300,6 +404,18 @@ namespace UcsInspectorperu.Ui
             // Campos legados que alguna vez aparecieron (para no romper carga)
             [DataMember] public int CompactPxAt96Dpi { get; set; } = 860;
             [DataMember] public string[] Favorites { get; set; } = new string[0];
+
+            // UiSettings.cs
+            [DataMember(Order = 20)]
+            public string ToggleHotkey { get; set; } = "Alt+F12";
+            [DataMember(Order = 30)]
+            public bool HintsAsTooltips { get; set; } = true;   // por defecto: usar ToolTips
+
+
+
+
+
+
 
             // === RUTA === (igual que ya tenías: %LOCALAPPDATA%\UcsInspectorperu\settings.json)
             private static string GetPath()
@@ -563,6 +679,37 @@ namespace UcsInspectorperu.Ui
             }
         }
 
+        // UcsForm.cs
+        private void SafeToggleShow()
+        {
+            if (this.IsDisposed) return;
+
+            if (this.InvokeRequired)
+            {
+                this.BeginInvoke((Action)SafeToggleShow);
+                return;
+            }
+
+            try
+            {
+                if (!this.Visible)
+                {
+                    this.Show();
+                    if (this.WindowState == FormWindowState.Minimized)
+                        this.WindowState = FormWindowState.Normal;
+
+                    this.Activate();
+                    // “pop” al frente sin quedarse topmost
+                    this.TopMost = true;
+                    this.TopMost = false;
+                }
+                else
+                {
+                    this.Hide();
+                }
+            }
+            catch { /* opcional: log */ }
+        }
 
 
         private void EnsureRecentMenu()
@@ -1247,15 +1394,28 @@ namespace UcsInspectorperu.Ui
 
         // UcsForm.cs
         // --- ÚNICO override ---
+        // --- ÚNICO override ---
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
             if (HandleHotkey(keyData)) return true;
             return base.ProcessCmdKey(ref msg, keyData);
         }
 
+        // Helper: ¿estamos editando texto/números?
+        private bool IsEditingTextual()
+        {
+            var c = this.ActiveControl;
+            if (c == null) return false;
+            if (c is TextBoxBase) return true;
+            if (c is NumericUpDown) return true;
+            return false;
+        }
+
         // --- ÚNICO router de hotkeys ---
         private bool HandleHotkey(Keys keyData)
         {
+            bool editing = IsEditingTextual();
+
             // 0) Recientes (funcionan aunque _ucs sea null)
             if (_cfg != null && _cfg.RecentHotkeys != null)
             {
@@ -1268,32 +1428,55 @@ namespace UcsInspectorperu.Ui
                 }
             }
 
-            // 1) Pick (config)
+            // 1) Pick (configurable)
             if (_cfg != null && !string.IsNullOrEmpty(_cfg.PickHotkey) &&
                 HotkeyUtil.Matches(keyData, _cfg.PickHotkey))
             { TryPickUcs(); return true; }
 
-            // 2) Enter = Siguiente
-            if (keyData == Keys.Enter) { NextUcs(); return true; }
+            // 2) Atajos UX generales
+            // Ctrl+Enter = Siguiente UCS (no rompe Enter normal)
+            if (keyData == (Keys.Control | Keys.Enter)) { NextUcs(); return true; }
 
-            // 3) Copiar / Pegar (no requieren _ucs)
-            if (keyData == (Keys.Control | Keys.C)) { if (btnCopy != null) btnCopy.PerformClick(); return true; }
-            if (keyData == (Keys.Control | Keys.V)) { if (btnPaste != null) btnPaste.PerformClick(); return true; }
+            // Alt+Enter = Aplicar (mismo efecto que click en btnApply)
+            if (keyData == (Keys.Alt | Keys.Enter))
+            {
+                if (btnApply != null && btnApply.Enabled) btnApply.PerformClick();
+                return true;
+            }
 
-            // 4) A partir de aquí sí necesitamos un UCS y Tags válidos
+            // Enter simple: que lo maneje AcceptButton (no interceptar mientras editas)
+            if (keyData == Keys.Enter && editing) return false;
+
+            // 3) Copiar / Pegar (no secuestrar si estás editando)
+            if (keyData == (Keys.Control | Keys.C))
+            {
+                if (!editing) { if (btnCopy != null) btnCopy.PerformClick(); return true; }
+                return false;
+            }
+            if (keyData == (Keys.Control | Keys.V))
+            {
+                if (!editing) { if (btnPaste != null) btnPaste.PerformClick(); return true; }
+                return false;
+            }
+
+            // 4) Medir → llenar nudge (siempre disponibles)
+            if (keyData == (Keys.Alt | Keys.D)) { MeasureDistanceToStepMm(); return true; } // Distancia → mm
+            if (keyData == (Keys.Alt | Keys.G)) { MeasureAngleToStepDeg(); return true; } // Ángulo → grados
+
+            // 5) Desde aquí sí necesitamos un _ucs y tags válidos
             if (_ucs == null) return false;
 
             double stepMM = (numStepMm != null) ? (double)numStepMm.Value : 1.0;
             double stepDeg = (numStepDeg != null) ? (double)numStepDeg.Value : 1.0;
 
-            var px = txtXo != null ? txtXo.Tag as Inventor.Parameter : null;
-            var py = txtYo != null ? txtYo.Tag as Inventor.Parameter : null;
-            var pz = txtZo != null ? txtZo.Tag as Inventor.Parameter : null;
-            var ax = txtXa != null ? txtXa.Tag as Inventor.Parameter : null;
-            var ay = txtYa != null ? txtYa.Tag as Inventor.Parameter : null;
-            var az = txtZa != null ? txtZa.Tag as Inventor.Parameter : null;
+            var px = (txtXo != null) ? txtXo.Tag as Inventor.Parameter : null;
+            var py = (txtYo != null) ? txtYo.Tag as Inventor.Parameter : null;
+            var pz = (txtZo != null) ? txtZo.Tag as Inventor.Parameter : null;
+            var ax = (txtXa != null) ? txtXa.Tag as Inventor.Parameter : null;
+            var ay = (txtYa != null) ? txtYa.Tag as Inventor.Parameter : null;
+            var az = (txtZa != null) ? txtZa.Tag as Inventor.Parameter : null;
 
-            // 5) Nudges de traslación (Alt+Q/W/A/S/Z/X)
+            // 6) Nudges de traslación (Alt+Q/W/A/S/Z/X)
             switch (keyData)
             {
                 case (Keys.Alt | Keys.Q): if (px != null) { Nudge(px, -stepMM, false); return true; } break;
@@ -1304,16 +1487,29 @@ namespace UcsInspectorperu.Ui
                 case (Keys.Alt | Keys.X): if (pz != null) { Nudge(pz, stepMM, false); return true; } break;
             }
 
-            // 6) Nudges de rotación (Ctrl+Alt+1..6) — no chocan con Alt+1..6 de “recientes”
+            // 7) Nudges de rotación (Ctrl+Alt+1..6) + NumPad
             switch (keyData)
             {
+                // Teclas superiores
                 case (Keys.Control | Keys.Alt | Keys.D1): if (ax != null) { Nudge(ax, stepDeg, true); return true; } break;
                 case (Keys.Control | Keys.Alt | Keys.D2): if (ax != null) { Nudge(ax, -stepDeg, true); return true; } break;
                 case (Keys.Control | Keys.Alt | Keys.D3): if (ay != null) { Nudge(ay, stepDeg, true); return true; } break;
                 case (Keys.Control | Keys.Alt | Keys.D4): if (ay != null) { Nudge(ay, -stepDeg, true); return true; } break;
                 case (Keys.Control | Keys.Alt | Keys.D5): if (az != null) { Nudge(az, stepDeg, true); return true; } break;
                 case (Keys.Control | Keys.Alt | Keys.D6): if (az != null) { Nudge(az, -stepDeg, true); return true; } break;
-                case (Keys.Alt | Keys.V): AlignViewToUcs(_ucs); return true;
+
+                // Numpad
+                case (Keys.Control | Keys.Alt | Keys.NumPad1): if (ax != null) { Nudge(ax, stepDeg, true); return true; } break;
+                case (Keys.Control | Keys.Alt | Keys.NumPad2): if (ax != null) { Nudge(ax, -stepDeg, true); return true; } break;
+                case (Keys.Control | Keys.Alt | Keys.NumPad3): if (ay != null) { Nudge(ay, stepDeg, true); return true; } break;
+                case (Keys.Control | Keys.Alt | Keys.NumPad4): if (ay != null) { Nudge(ay, -stepDeg, true); return true; } break;
+                case (Keys.Control | Keys.Alt | Keys.NumPad5): if (az != null) { Nudge(az, stepDeg, true); return true; } break;
+                case (Keys.Control | Keys.Alt | Keys.NumPad6): if (az != null) { Nudge(az, -stepDeg, true); return true; } break;
+
+                // Vista alineada al UCS
+                case (Keys.Alt | Keys.V):
+                    AlignViewToUcs(_ucs);
+                    return true;
             }
 
             return false;
@@ -2080,55 +2276,66 @@ Rutas
         {
             try
             {
-                // 1) Cargar cfg si no está en memoria
                 if (_cfg == null)
                     _cfg = UiSettings.Load() ?? new UiSettings();
 
-                // 2) Refrescar UI/recientes
-                ApplySettingsToUi(_cfg);
-                InitRecentsFromConfig();
-                RefreshRecentButtons();
+                // ── UI (no repintar si estás editando un TextBox/NumericUpDown) ─────────
+                bool editing = IsEditingTextual(); // helper: ActiveControl es TextBoxBase/NumericUpDown
+                if (!editing)
+                {
+                    ApplySettingsToUi(_cfg);
+                    InitRecentsFromConfig();
+                    RefreshRecentButtons();
+                }
 
-                // 3) Hotkeys
+                // ── Hotkeys globales ────────────────────────────────────────────────────
                 GlobalHotkeys.UnregisterAll();
-
-                if (_cfg == null || !_cfg.GlobalNudgeHotkeys)
-                    return;
 
                 var list = new List<Tuple<uint, uint, Action>>();
 
-                // Recientes → teclas 1..6 (según _cfg.RecentHotkeys)
-                var rh = _cfg.RecentHotkeys;
-                int max = (rh != null) ? Math.Min(6, rh.Length) : 0;
-                for (int i = 0; i < max; i++)
+                // 0) Toggle (Alt+F12 por defecto) → SIEMPRE disponible
+                HotkeyUtil.Parsed tg;
+                string toggle = (!string.IsNullOrEmpty(_cfg.ToggleHotkey)) ? _cfg.ToggleHotkey : "Alt+F12";
+                if (HotkeyUtil.TryParse(toggle, out tg) && tg.IsValid)
+                    list.Add(Tuple.Create(tg.FsModifiers, tg.VirtualKey, (Action)SafeToggleShow));
+
+                // 1) Resto de globales solo si está habilitado en settings
+                if (_cfg.GlobalNudgeHotkeys)
                 {
-                    HotkeyUtil.Parsed p;
-                    if (!string.IsNullOrEmpty(rh[i]) &&
-                        HotkeyUtil.TryParse(rh[i], out p) && p.IsValid)
+                    // Recientes (1..6)
+                    var rh = _cfg.RecentHotkeys;
+                    int max = (rh != null) ? Math.Min(6, rh.Length) : 0;
+                    for (int i = 0; i < max; i++)
                     {
-                        int captured = i; // capturar índice
-                        list.Add(Tuple.Create(p.FsModifiers, p.VirtualKey,
-                            (Action)(() => SelectRecentByIndex(captured))));
+                        HotkeyUtil.Parsed p;
+                        if (!string.IsNullOrEmpty(rh[i]) &&
+                            HotkeyUtil.TryParse(rh[i], out p) && p.IsValid)
+                        {
+                            int captured = i;
+                            list.Add(Tuple.Create(p.FsModifiers, p.VirtualKey,
+                                (Action)(() => SelectRecentByIndex(captured))));
+                        }
+                    }
+
+                    // Pick en pantalla
+                    HotkeyUtil.Parsed pp;
+                    if (!string.IsNullOrEmpty(_cfg.PickHotkey) &&
+                        HotkeyUtil.TryParse(_cfg.PickHotkey, out pp) && pp.IsValid)
+                    {
+                        list.Add(Tuple.Create(pp.FsModifiers, pp.VirtualKey, (Action)TryPickUcs));
                     }
                 }
 
-                // Pick en pantalla
-                HotkeyUtil.Parsed pp;
-                if (!string.IsNullOrEmpty(_cfg.PickHotkey) &&
-                    HotkeyUtil.TryParse(_cfg.PickHotkey, out pp) && pp.IsValid)
-                {
-                    list.Add(Tuple.Create(pp.FsModifiers, pp.VirtualKey, (Action)TryPickUcs));
-                }
-
-                // Registrar solo si hay hotkeys válidas y _app está disponible
-                if (list.Count > 0 && _app != null)
+                // Registrar si hay algo y la ventana de Inventor existe
+                if (list.Count > 0 && _app != null && _app.MainFrameHWND != 0)
                     GlobalHotkeys.RegisterMany(new IntPtr(_app.MainFrameHWND), list);
             }
             catch (Exception ex)
             {
-                // opcional: SafeLog("ReloadSettingsAndHotkeys: " + ex.Message);
+                // TODO: SafeLog("ReloadSettingsAndHotkeys: " + ex.Message);
             }
         }
+
 
 
 
@@ -2271,7 +2478,7 @@ Rutas
             PutHintOnRow(_hintRY, 4);
             PutHintOnRow(_hintRZ, 5);
 
-            // ===== Acciones (FlowLayout, alto fijo 24) =====
+            // ===== Acciones =====
             var actions = new WinFlow
             {
                 Dock = DockStyle.Top,
@@ -2279,14 +2486,16 @@ Rutas
                 Padding = new Padding(12, 8, 12, 0)
             };
 
-            numStepMm = new NumericUpDown { Width = 70, DecimalPlaces = 3, Minimum = 0.001M, Maximum = 10000M, Increment = 0.1M, Value = 1M, Margin = new Padding(0, 0, 6, 0) };
-            numStepDeg = new NumericUpDown { Width = 70, DecimalPlaces = 2, Minimum = 0.01M, Maximum = 360M, Increment = 0.1M, Value = 1M, Margin = new Padding(0, 0, 12, 0) };
+            // Steps cómodos
+            numStepMm = new NumericUpDown { Width = 70, DecimalPlaces = 3, Minimum = 0.001M, Maximum = 10000M, Increment = 0.1M, Value = 1M, Margin = new Padding(0, 0, 6, 0), TextAlign = HorizontalAlignment.Right };
+            numStepDeg = new NumericUpDown { Width = 70, DecimalPlaces = 2, Minimum = 0.01M, Maximum = 360M, Increment = 0.1M, Value = 1M, Margin = new Padding(0, 0, 12, 0), TextAlign = HorizontalAlignment.Right };
 
             actions.Controls.Add(new WinLabel { Text = "Paso mm", AutoSize = true, Margin = new Padding(0, 4, 6, 0) });
             actions.Controls.Add(numStepMm);
             actions.Controls.Add(new WinLabel { Text = "Paso °", AutoSize = true, Margin = new Padding(0, 4, 6, 0) });
             actions.Controls.Add(numStepDeg);
 
+            // Botones principales
             btnCenter = NewCmd("Centrar", (s, e) => CenterOnUcs(_ucs));
             btnCopy = NewCmd("Copiar", (s, e) => _clipboard = CopyUcs());
             btnPaste = NewCmd("Pegar", BtnPaste_Click);
@@ -2298,13 +2507,27 @@ Rutas
             chkDelta = new CheckBox { Text = "Pegar Δ", AutoSize = true, Margin = new Padding(12, 4, 12, 0) };
             var btnViewUcs = NewCmd("Vista =", (s, e) => AlignViewToUcs(_ucs));
 
-            actions.Controls.AddRange(new Control[] { btnCenter, btnCopy, btnPaste, btnNext, btnRefresh, btnExp, btnHelp, btnApply, chkDelta, btnViewUcs });
+            // NUEVOS: medir y settings
+            var btnMeasureMm = NewCmd("Medir mm (Alt+D)", (s, e) => MeasureDistanceToStepMm());
+            var btnMeasureDeg = NewCmd("Medir ° (Alt+G)", (s, e) => MeasureAngleToStepDeg());
+            var btnSettings = NewCmd("Settings…", btnSettings_Click);
+
+            actions.Controls.AddRange(new SysWin.Control[]
+            {
+        btnCenter, btnCopy, btnPaste, btnNext, btnRefresh, btnExp, btnHelp,
+        btnApply, chkDelta, btnViewUcs, btnMeasureMm, btnMeasureDeg, btnSettings
+            });
+
             _content.Controls.Add(actions);
 
             // al final de BuildLayout()
             WireNudges();
-
         }
+
+
+
+     
+
 
         private WinButton NewCmd(string text, EventHandler onClick)
         {
@@ -2387,19 +2610,22 @@ Rutas
         }
 
 
-        private void SetHintsVisibility(bool vis)
-        {
-            if (_hintX == null) return;
-            _hintX.Visible = _hintY.Visible = _hintZ.Visible = _hintRX.Visible = _hintRY.Visible = _hintRZ.Visible = vis;
-        }
-
+        // Usa tu alias si lo tienes: using SysWin = System.Windows.Forms;
         private void SetHintsAsTooltips(bool enable)
         {
+            // crea el ToolTip si hace falta
             if (_tt == null)
                 _tt = new ToolTip { AutoPopDelay = 5000, InitialDelay = 300, ReshowDelay = 100, ShowAlways = true };
 
-            void set(Control c, Label hint) { if (c != null && hint != null) _tt.SetToolTip(c, enable ? hint.Text : null); }
+            // helper local
+            void set(Control c, Label hint)
+            {
+                if (c == null) return;
+                var text = (enable && hint != null) ? hint.Text : null;
+                _tt.SetToolTip(c, text);
+            }
 
+            // aplica a tus controles (ajusta nombres si cambian)
             set(txtXo, _hintX); set(txtYo, _hintY); set(txtZo, _hintZ);
             set(txtXa, _hintRX); set(txtYa, _hintRY); set(txtZa, _hintRZ);
         }
@@ -2531,11 +2757,286 @@ Rutas
 
 
 
+        private void btnSettings_Click(object sender, EventArgs e)
+        {
+            using (var dlg = new HotkeySettingsForm(_cfg)) // se edita la misma instancia
+            {
+                if (dlg.ShowDialog(this) == DialogResult.OK)
+                {
+                    _cfg.Save();                  // guarda JSON
+                    ReloadSettingsAndHotkeys();   // aplica sin reiniciar
+                }
+            }
+        }
 
 
+        internal class KeyCaptureTextBox : SysWin.TextBox
+        {
+            protected override void OnKeyDown(SysWin.KeyEventArgs e)
+            {
+                // Limpiar con Backspace/Delete
+                if (e.KeyCode == SysWin.Keys.Back || e.KeyCode == SysWin.Keys.Delete)
+                {
+                    this.Clear();
+                    e.Handled = true; e.SuppressKeyPress = true;
+                    return;
+                }
 
+                // Ignorar cuando es solo un modificador
+                if (e.KeyCode == SysWin.Keys.ControlKey ||
+                    e.KeyCode == SysWin.Keys.ShiftKey ||
+                    e.KeyCode == SysWin.Keys.Menu)
+                {
+                    e.Handled = true; e.SuppressKeyPress = true;
+                    return;
+                }
 
+                string s = FormatHotkey(e);
+                if (!string.IsNullOrEmpty(s)) this.Text = s;
 
+                e.Handled = true; e.SuppressKeyPress = true;
+                base.OnKeyDown(e);
+            }
+
+            private static string FormatHotkey(SysWin.KeyEventArgs e)
+            {
+                string mods = "";
+                if (e.Control) mods = Append(mods, "Ctrl");
+                if (e.Alt) mods = Append(mods, "Alt");
+                if (e.Shift) mods = Append(mods, "Shift");
+
+                string key = MapKey(e.KeyCode);
+                if (string.IsNullOrEmpty(key)) return mods;
+
+                return string.IsNullOrEmpty(mods) ? key : (mods + "+" + key);
+            }
+
+            private static string Append(string a, string b) { return string.IsNullOrEmpty(a) ? b : a + "+" + b; }
+
+            private static string MapKey(SysWin.Keys k)
+            {
+                if (k >= SysWin.Keys.A && k <= SysWin.Keys.Z) return k.ToString();         // A..Z
+                if (k >= SysWin.Keys.D0 && k <= SysWin.Keys.D9) return "D" + (k - SysWin.Keys.D0); // D0..D9
+                if (k >= SysWin.Keys.NumPad0 && k <= SysWin.Keys.NumPad9) return "NumPad" + (k - SysWin.Keys.NumPad0);
+                if (k >= SysWin.Keys.F1 && k <= SysWin.Keys.F24) return "F" + (k - SysWin.Keys.F1 + 1);
+
+                if (k == SysWin.Keys.Space) return "Space";
+                if (k == SysWin.Keys.Tab) return "Tab";
+                if (k == SysWin.Keys.Escape) return "Esc";
+                if (k == SysWin.Keys.Enter) return "Enter";
+                return k.ToString();
+            }
+        }
+
+        public class HotkeySettingsForm : SysWin.Form
+        {
+            private UiSettings _cfg;
+
+            private SysWin.CheckBox chkGlobal;
+            private KeyCaptureTextBox txtToggle;
+            private KeyCaptureTextBox txtPick;
+            private KeyCaptureTextBox[] txtRec = new KeyCaptureTextBox[6];
+
+            private SysWin.Button btnOk, btnCancel, btnDefaults;
+
+            public HotkeySettingsForm(UiSettings cfg)
+            {
+                if (cfg == null) throw new ArgumentNullException("cfg");
+                _cfg = cfg;
+
+                Text = "Configuración de Atajos – UCS Inspector";
+                FormBorderStyle = SysWin.FormBorderStyle.FixedDialog;
+                StartPosition = SysWin.FormStartPosition.CenterParent;
+                MaximizeBox = false; MinimizeBox = false;
+                ClientSize = new SysDraw.Size(480, 330);
+
+                BuildUi();
+                LoadFromCfg();
+
+                AcceptButton = btnOk;
+                CancelButton = btnCancel;
+            }
+
+            private void BuildUi()
+            {
+                int y = 16;
+
+                chkGlobal = new SysWin.CheckBox
+                {
+                    Text = "Habilitar atajos globales (funcionan sin foco en el formulario)",
+                    Location = new SysDraw.Point(16, y),
+                    Size = new SysDraw.Size(440, 24)
+                };
+                Controls.Add(chkGlobal);
+                y += 32;
+
+                var lblToggle = new SysWin.Label
+                {
+                    Text = "Mostrar/Ocultar (toggle):",
+                    Location = new SysDraw.Point(16, y + 3),
+                    Size = new SysDraw.Size(170, 20)
+                };
+                Controls.Add(lblToggle);
+
+                txtToggle = new KeyCaptureTextBox
+                {
+                    Location = new SysDraw.Point(200, y),
+                    Size = new SysDraw.Size(120, 24)
+                };
+                Controls.Add(txtToggle);
+                y += 32;
+
+                var lblPick = new SysWin.Label
+                {
+                    Text = "Pick en pantalla:",
+                    Location = new SysDraw.Point(16, y + 3),
+                    Size = new SysDraw.Size(170, 20)
+                };
+                Controls.Add(lblPick);
+
+                txtPick = new KeyCaptureTextBox
+                {
+                    Location = new SysDraw.Point(200, y),
+                    Size = new SysDraw.Size(120, 24)
+                };
+                Controls.Add(txtPick);
+                y += 36;
+
+                var lblRec = new SysWin.Label
+                {
+                    Text = "Recientes (1–6):",
+                    Location = new SysDraw.Point(16, y + 3),
+                    Size = new SysDraw.Size(170, 20)
+                };
+                Controls.Add(lblRec);
+
+                for (int i = 0; i < 6; i++)
+                {
+                    var t = new KeyCaptureTextBox
+                    {
+                        Location = new SysDraw.Point(200 + (i % 3) * 90, y + (i / 3) * 32),
+                        Size = new SysDraw.Size(80, 24)
+                    };
+                    Controls.Add(t);
+                    txtRec[i] = t;
+
+                    var cap = new SysWin.Label
+                    {
+                        Text = (i + 1).ToString(),
+                        TextAlign = SysDraw.ContentAlignment.MiddleLeft,
+                        Location = new SysDraw.Point(200 + (i % 3) * 90 - 18, y + (i / 3) * 32 + 3),
+                        Size = new SysDraw.Size(16, 20)
+                    };
+                    Controls.Add(cap);
+                }
+
+                btnDefaults = new SysWin.Button
+                {
+                    Text = "Restaurar por defecto",
+                    Location = new SysDraw.Point(16, ClientSize.Height - 44),
+                    Size = new SysDraw.Size(160, 28)
+                };
+                btnDefaults.Click += (s, e) => LoadDefaults();
+                Controls.Add(btnDefaults);
+
+                btnOk = new SysWin.Button
+                {
+                    Text = "Aceptar",
+                    Location = new SysDraw.Point(ClientSize.Width - 180, ClientSize.Height - 44),
+                    Size = new SysDraw.Size(80, 28)
+                };
+                btnOk.Click += OnOk;
+                Controls.Add(btnOk);
+
+                btnCancel = new SysWin.Button
+                {
+                    Text = "Cancelar",
+                    Location = new SysDraw.Point(ClientSize.Width - 92, ClientSize.Height - 44),
+                    Size = new SysDraw.Size(80, 28),
+                    DialogResult = SysWin.DialogResult.Cancel
+                };
+                Controls.Add(btnCancel);
+            }
+
+            private void LoadFromCfg()
+            {
+                chkGlobal.Checked = _cfg.GlobalNudgeHotkeys;
+                txtToggle.Text = _cfg.ToggleHotkey ?? "";
+                txtPick.Text = _cfg.PickHotkey ?? "";
+
+                for (int i = 0; i < 6; i++)
+                {
+                    string v = (_cfg.RecentHotkeys != null && i < _cfg.RecentHotkeys.Length)
+                             ? _cfg.RecentHotkeys[i] : "";
+                    txtRec[i].Text = v ?? "";
+                }
+            }
+
+            private void LoadDefaults()
+            {
+                chkGlobal.Checked = true;
+                txtToggle.Text = "Alt+F12";
+                txtPick.Text = "Alt+P";
+                txtRec[0].Text = "Alt+D1";
+                txtRec[1].Text = "Alt+D2";
+                txtRec[2].Text = "Alt+D3";
+                txtRec[3].Text = "Alt+D4";
+                txtRec[4].Text = "Alt+D5";
+                txtRec[5].Text = "Alt+D6";
+            }
+
+            private void OnOk(object sender, EventArgs e)
+            {
+                if (!IsValidOrEmpty(txtToggle.Text) ||
+                    !IsValidOrEmpty(txtPick.Text) ||
+                    !IsValidOrEmpty(txtRec[0].Text) ||
+                    !IsValidOrEmpty(txtRec[1].Text) ||
+                    !IsValidOrEmpty(txtRec[2].Text) ||
+                    !IsValidOrEmpty(txtRec[3].Text) ||
+                    !IsValidOrEmpty(txtRec[4].Text) ||
+                    !IsValidOrEmpty(txtRec[5].Text))
+                {
+                    SysWin.MessageBox.Show(this,
+                        "Hay atajos con formato no válido. Revisa los campos en rojo.",
+                        "Atajos inválidos", SysWin.MessageBoxButtons.OK, SysWin.MessageBoxIcon.Warning);
+                    return;
+                }
+
+                _cfg.GlobalNudgeHotkeys = chkGlobal.Checked;
+                _cfg.ToggleHotkey = (txtToggle.Text ?? "").Trim();
+                _cfg.PickHotkey = (txtPick.Text ?? "").Trim();
+
+                _cfg.RecentHotkeys = new string[6];
+                for (int i = 0; i < 6; i++)
+                    _cfg.RecentHotkeys[i] = (txtRec[i].Text ?? "").Trim();
+
+                DialogResult = SysWin.DialogResult.OK;
+                Close();
+            }
+
+            private bool IsValidOrEmpty(string s)
+            {
+                if (string.IsNullOrEmpty(s)) return true;
+                HotkeyUtil.Parsed p;
+                bool ok = HotkeyUtil.TryParse(s, out p) && p.IsValid;
+                if (!ok)
+                {
+                    // marcar visual al primero que coincida
+                    foreach (SysWin.Control c in Controls)
+                    {
+                        var t = c as SysWin.TextBox;
+                        if (t != null && string.Equals(t.Text, s, StringComparison.Ordinal))
+                        {
+                            t.BackColor = SysDraw.Color.MistyRose;
+                            break;
+                        }
+                    }
+                }
+                return ok;
+            }
+        }
+
+     
 
     }
 }
